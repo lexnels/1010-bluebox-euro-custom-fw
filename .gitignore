@@ -2,6 +2,14 @@
 *.bin
 *.BIN
 
+# Build output and local analysis (Ghidra projects and decompiled listings stay local)
+out/
+ghidra/*.gpr
+ghidra/*.rep
+ghidra/*.c
+ghidra/*.log
+__pycache__/
+
 # OS / editor
 .DS_Store
 *.swp
