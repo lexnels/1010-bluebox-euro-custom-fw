@@ -1,0 +1,7 @@
+# Firmware images (stock firmware belongs to 1010music; don't publish)
+*.bin
+*.BIN
+
+# OS / editor
+.DS_Store
+*.swp
