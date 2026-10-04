@@ -1,0 +1,9 @@
+firmware/*.bin
+*.bin
+*.BIN
+ghidra/*.gpr
+ghidra/*.rep
+ghidra/*.c
+ghidra/*.log
+out/
+__pycache__/
