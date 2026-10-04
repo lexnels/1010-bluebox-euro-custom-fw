@@ -6,7 +6,9 @@ Custom firmware modifications for the 1010music **bluebox eurorack edition**
 ## Goals
 
 - Add a **CPU meter** to the UI. Done, works on hardware.
-- Add a new lush, creamy **hall reverb**: build `hall`, "Lush Hall" as a 16th reverb style. Untested on hardware.
+- Add a new lush, creamy **hall reverb**: build `hall`, "Lush Hall" as a 16th reverb style. Works on hardware.
+- Alternative reverb styles **MVerb**, **Squall** and **Freeverb**, and **Diffusion** and **Spread** knobs on the reverb
+  panel: build `hall`. Untested on hardware.
 
 ## Approach
 
@@ -27,25 +29,40 @@ firmware from 1010music and keep it locally.
 
 ## What's in build `hall`
 
-- **Lush Hall**, a 16th reverb style after Clouds. It runs its own engine (`src/hall_dsp.h`): pre-delay, a 3-stage
-  8-channel diffuser (so the onset is a smooth cloud, not discrete echoes), then an 8-line feedback delay network
-  with independently modulated delay lines, a two-band decay, damping and an allpass in each line, mixed by an 8x8
-  Hadamard matrix.
+Four reverb styles after the stock 15 (Clouds), each with its own engine running in the stock reverb's delay memory:
 
-  The reverb page only shows Style, Time, Level, Pre Delay, Low Cut, HI C and Freeze; the stock engine's other
-  params (size, diffusion, modulation and so on) are set inside its presets and never reach the screen. So in Lush
-  Hall those are fixed, tuned values, and the visible controls do this:
+| style | engine | source |
+|---|---|---|
+| Lush Hall | pre-delay, a 3-stage 8-channel diffuser, then an 8-line feedback delay network with modulated lines, two-band decay, damping and an allpass in each line, mixed by an 8x8 Hadamard matrix (`src/hall_dsp.h`) | written for this mod |
+| MVerb | Dattorro-style plate/hall tank (`src/rev_mverb.h`) | port of [martineastwood/mverb](https://github.com/martineastwood/mverb), **GPL-3.0** |
+| Squall | the Mutable Instruments Clouds reverb as voiced in Squall (`src/rev_squall.h`) | [DanielMajid/squall_reverb](https://github.com/DanielMajid/squall_reverb); reverb core by Emilie Gillet, MIT |
+| Freeverb | 8 combs + 4 allpasses per side (`src/rev_freeverb.h`) | [sinshu/freeverb](https://github.com/sinshu/freeverb), Jezar's public-domain original |
 
-  | control | in Lush Hall |
-  |---|---|
-  | Time | decay: 0.4 s at the bottom, 3.2 s in the middle (default), 25 s at the top |
-  | Level | output level, like the stock styles |
-  | Pre Delay | pre-delay, up to ~0.65 s |
-  | Low Cut | input high-pass, 20 Hz to 1 kHz |
-  | HI C | tone: brightness of the input and how fast highs die away |
-  | Freeze | holds the tail and ignores new input |
+MVerb, Squall and Freeverb share a wrapper (`src/rev_common.h`) that adds the low cut, pre-delay, stereo width, level
+and a fade-in they lack.
 
-  Switching to or from Lush Hall mutes the reverb for ~30 audio blocks while the shared delay memory is cleared.
+**Reverb panel.** The panel now has 8 knobs in two pages of four: Time, Level, **Diffusion**, **Spread** | Pre Delay,
+Low Cut, HI C, Freeze. Diffusion and Spread are the stock engine's own params, so they work on the stock styles too.
+A stock style sets them when you pick it and the panel shows the new values; projects and FX presets save them.
+
+| control | Lush Hall | MVerb | Squall | Freeverb |
+|---|---|---|---|---|
+| Time | decay 0.4 s / 3.2 s / 25 s (bottom / middle / top) | decay | loop gain | decay 0.5 s / 2.5 s / 12.5 s |
+| Level | output level | output level | output level | output level |
+| Diffusion | spread of the input diffuser (smear of the onset) | tank density | allpass amount | allpass feedback |
+| Spread | stereo width, -1000 mono, 0 normal, +1000 extra wide | same | same | same |
+| Pre Delay | pre-delay, up to ~0.65 s | pre-delay of the tank | pre-delay | pre-delay |
+| Low Cut | input high-pass, 20 Hz to 1 kHz | same | same | same |
+| HI C | brightness of the input and of the tail | damping and bandwidth | loop low-pass | damping |
+| Freeze | holds the tail and ignores new input | same | same | same |
+
+Size, Feedback, modulation, early reflections and Resonance aren't on the panel (it has room for 8 knobs reachable
+with the encoders), so the new styles use fixed, tuned values for them.
+
+Switching to or from one of the new styles mutes the reverb for ~30 audio blocks while the shared delay memory is
+cleared. A project saved with one of the new styles won't load that style on stock firmware.
+
+**Licence note:** MVerb is GPL-3.0. Its port is kept in its own file, `src/rev_mverb.h`, under that licence.
 
 ## Build
 
@@ -59,6 +76,7 @@ python3 patch.py cpu hall     # -> out/cpu+hall/BLUEEURO.BIN (patchsets combine)
 python3 test_cpu.py           # runs both hooks under Unicorn (pip install unicorn capstone)
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
+cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 ```
 
 ## Install / go back

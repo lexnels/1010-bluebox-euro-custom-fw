@@ -81,9 +81,27 @@ check(bl_target(0x08048E56) == s7["hall_set"], "reverb event loop's setter call 
 check(u32(0x0806ADAC) == s7["hall_process"] | 1, "reverb vtable process slot goes to hall_process")
 for core, lit, cnt in [("M7", 0x08055DA0, 0x08055BA2), ("M4", 0x081370D4, 0x08136EE8)]:
     lst = u32(lit)
-    names = [cstr(u32(lst + 4 * i)) for i in range(16)]
-    check(names[0] == "Tight Ambience" and names[14] == "Clouds" and names[15] == "Lush Hall"
-          and data[file_off(cnt)] == 16, f"{core} style list has 16 entries ending in Lush Hall")
+    names = [cstr(u32(lst + 4 * i)) for i in range(19)]
+    check(names[0] == "Tight Ambience" and names[14] == "Clouds" and names[15:] == ["Lush Hall", "MVerb", "Squall", "Freeverb"]
+          and data[file_off(cnt)] == 19, f"{core} style list has 19 entries: stock, then {', '.join(names[15:])}")
+
+check(bl_target(0x08048E6E) == s7["hall_echo"], "stock style-change echo goes to hall_echo")
+
+# M4 reverb param list: run the patched case 5 of FUN_0812060c, record what it appends
+SET, M4TAIL, M4ADD = 0x24030000, 0x0812088C, 0x081205E2
+added = []
+def m4_add(uc, a, size, _):
+    added.append((uc.reg_read(UC_ARM_REG_R0), uc.reg_read(UC_ARM_REG_R1), struct.unpack("<i", struct.pack("<I", uc.reg_read(UC_ARM_REG_R2)))[0]))
+    uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+h = uc.hook_add(UC_HOOK_CODE, m4_add, begin=M4ADD, end=M4ADD)
+uc.reg_write(UC_ARM_REG_R4, SET); uc.reg_write(UC_ARM_REG_R5, 0x1234); uc.reg_write(UC_ARM_REG_SP, 0x2407F000)
+uc.emu_start(0x08120C1C | 1, M4TAIL, count=1000)
+uc.hook_del(h)
+check(uc.reg_read(UC_ARM_REG_PC) == M4TAIL and uc.reg_read(UC_ARM_REG_R4) == SET and uc.reg_read(UC_ARM_REG_R5) == 0x1234
+      and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 reverb list: reaches the common tail with r4, r5, sp intact")
+check([(i, v) for _, i, v in added] == [(0x155, 0), (0x159, 1000), (0x15A, 1000), (0x13E, 800), (0x146, 0), (0x13D, 475),
+      (0x14A, 0), (0x148, 1000), (0x14F, 0)] and all(o == SET for o, _, _ in added),
+      "M4 reverb list: Style, Time, Level, Diffusion, Spread, Pre Delay, Low Cut, HI C, Freeze")
 
 # ---- fake reverb object, buses, events
 uc.mem_write(OBJ, struct.pack("<I", 0x0806ADA0))                    # vtable
@@ -136,9 +154,32 @@ print(f"     {icount['n']} instructions per {N}-frame block = {per:.0f} per fram
       f"(~{per * 48000 / 480e6 * 100:.1f}% of 480 MHz at 1 instruction/cycle, before memory stalls)")
 check(per < 1100, "under 1100 instructions per frame")
 
+# the other new styles: each takes over after the hand-over and makes a tail
+for style, name in [(16, "MVerb"), (17, "Squall"), (18, "Freeverb")]:
+    events([(0x155, style)])
+    for _ in range(CLEAR_BLOCKS):
+        _, l, rr = block([0.0] * N, [0.0] * N)
+    check(max(map(abs, l + rr)) == 0.0 and calls["process"] == 1, f"{name}: silent hand-over, stock engine stays off")
+    tail = []
+    block([1.0] + [0.0] * (N - 1), [1.0] + [0.0] * (N - 1))
+    for _ in range(150):
+        _, l, rr = block([0.0] * N, [0.0] * N)
+        tail += [x * x + y * y for x, y in zip(l, rr)]
+    check(sum(tail) > 1e-5 and all(math.isfinite(x) for x in tail), f"{name}: impulse makes a tail (energy {sum(tail):.4f})")
+    h = uc.hook_add(UC_HOOK_CODE, count, begin=0x08000000, end=0x081FFFFF)
+    icount["n"] = 0
+    block([0.1] * N, [-0.1] * N)
+    uc.hook_del(h)
+    print(f"     {name}: {icount['n'] / N:.0f} instructions per frame")
+    check(icount["n"] / N < 1100, f"{name}: under 1100 instructions per frame")
+events([(0x155, 15)])
+for _ in range(CLEAR_BLOCKS + 1):
+    block([0.0] * N, [0.0] * N)
+check(rd(uc, MEM, "<I")[0] == 0x4C4C4148, "back to Lush Hall")
+
 # a style knob value past the list is ignored
 n_set = len(calls["set"])
-call(s7["hall_set"] | 1, OBJ, 0x155, s0=16.0)
+call(s7["hall_set"] | 1, OBJ, 0x155, s0=19.0)
 check(len(calls["set"]) == n_set, "style values past the list never reach the stock setter")
 
 # bypass hands back to the stock engine with its memory zeroed
@@ -158,8 +199,13 @@ check(calls["process"] == 2 and rd(uc, MEM, "<I")[0] == 0x4C4C4148, "un-bypass: 
 uc.mem_write(MEM + 0xFFFFC, struct.pack("<f", 0.5))
 events([(0x155, 3)])
 n_echo = calls["echo"]
+TOM4 = CTX + 0x1529C
+uc.mem_write(TOM4 + 0x600, struct.pack("<I", 0))
+uc.mem_write(OBJ + 0x78, struct.pack("<f", 0.65)); uc.mem_write(OBJ + 0xA0, struct.pack("<f", -50.0))
 r, l, rr = block([0.5] * N, [0.5] * N)
 check((0x155, 3.0) in calls["set"] and calls["echo"] == n_echo + 1, "leaving: style 3 reaches the stock setter, presets echoed")
+sent = [rd(uc, TOM4 + i * 24, "<B7xIIiI") for i in range(rd(uc, TOM4 + 0x600, "<I")[0])]
+check(sent == [(0x39, QID, 0x13E, 650, 0), (0x39, QID, 0x146, -500, 0)], "style change: Diffusion and Spread sent back to the M4")
 check(max(map(abs, l + rr)) == 0.0, "leaving: that block is silent")
 for _ in range(CLEAR_BLOCKS - 1):
     block([0.5] * N, [0.5] * N)
