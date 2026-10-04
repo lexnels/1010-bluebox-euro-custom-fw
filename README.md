@@ -65,9 +65,7 @@ redirected to it. The file size doesn't change.
 `ghidra/` has headless import/decompile scripts (Ghidra 11.4.2 + its bundled pyghidra). `tools.py` has address and
 branch helpers.
 
-## Untested on hardware
+## Hardware status
 
-- Whether the bootloader accepts a modified file. It's the same file size, and the Blackbox's bootloader accepts
-  modified files.
-- Screen orientation: memory rows are assumed to run top-down. If the bar appears at the bottom right instead, change
-  `BAR_Y0` in `src/cm4_cpu.c`.
+- Build `cpu` flashed and works on a real unit (2026-10-04). The bootloader accepts a modified image of the same size,
+  and the screen's memory rows run top-down as assumed.
