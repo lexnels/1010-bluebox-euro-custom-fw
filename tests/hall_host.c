@@ -14,9 +14,10 @@ static int fails;
 
 static struct hall_knobs defaults(void)
 {
-    struct hall_knobs k = { .size = 0.7f, .decay = 0.5f, .diffusion = 0.7f, .density = 0.5f, .predelay_s = 0.02f,
-                            .er_time_s = 0.04f, .er_db = -12.f, .level_db = 0.f, .spread = 0.f, .lowcut = 0.1f,
-                            .hicut = 0.6f, .bass = 0.5f, .mod_rate = 0.35f, .mod_depth = 0.4f, .freeze = 0 };
+    /* what the device uses (src/hall_m7.c knobs_from), Time and Level at their defaults */
+    struct hall_knobs k = { .size = 0.8f, .decay = 0.5141f, .diffusion = 1.0f, .density = 0.8f, .predelay_s = 0.02f,
+                            .er_time_s = 0.025f, .er_db = -36.f, .level = 1.f, .spread = 0.25f, .lowcut = 0.f,
+                            .hicut = 1.f, .bass = 0.6f, .mod_rate = 0.4f, .mod_depth = 0.5f, .freeze = 0 };
     return k;
 }
 
@@ -38,6 +39,45 @@ static int impulse(const struct hall_knobs *k, float secs, float *env, float *ou
         }
     }
     return frames;
+}
+
+static float ned(const float *x, int at)
+{
+    const int w = 960;   /* 20 ms */
+    double e = 0; int c = 0;
+    for (int i = at - w / 2; i < at + w / 2; i++) e += x[i] * x[i];
+    float sd = sqrt(e / w);
+    for (int i = at - w / 2; i < at + w / 2; i++) c += fabsf(x[i]) > sd;
+    return c / (float)w / 0.3173f;
+}
+
+/* How metallic/echoey a tail is: (a) the strongest repeat in its autocorrelation (lags 2..80 ms), (b) how far the
+ * tallest spectral peaks stand above the typical level (narrow resonances ring). Measured on 0.25..0.42 s. */
+static void ringiness(const float *x, float *ac_peak, float *spec_peak_db)
+{
+    const int off = 12000, n = 8192;
+    double e = 0, best = 0;
+    for (int i = 0; i < n; i++) e += x[off + i] * x[off + i];
+    for (int lag = 96; lag < 3840; lag++) {
+        double c = 0;
+        for (int i = 0; i < n; i++) c += x[off + i] * x[off + i + lag];
+        if (c / e > best) best = c / e;
+    }
+    *ac_peak = best;
+    static float mag[4096];
+    for (int b = 1; b < 2048; b++) {               /* up to 12 kHz */
+        double re = 0, im = 0, w = 2 * M_PI * b / n;
+        for (int i = 0; i < n; i++) { double hw = 0.5 - 0.5 * cos(2 * M_PI * i / n); re += hw * x[off + i] * cos(w * i); im -= hw * x[off + i] * sin(w * i); }
+        mag[b] = re * re + im * im;
+    }
+    /* peak vs local median-ish (mean of a +-40 bin window), worst over 100 Hz..10 kHz */
+    float worst = 0;
+    for (int b = 20; b < 1700; b++) {
+        double m = 0; for (int j = -40; j <= 40; j++) m += mag[b + j]; m /= 81;
+        float r = 10 * log10(mag[b] / m);
+        if (r > worst) worst = r;
+    }
+    *spec_peak_db = worst;
 }
 
 /* RT60 from the slope of the energy decay curve (Schroeder integration), -5 to -25 dB */
@@ -96,11 +136,16 @@ int main(int argc, char **argv)
     CHECK(fabs(10 * log10(eL / eR)) < 1.5, "left/right balanced");
     CHECK(fabsf(corr) < 0.3f, "stereo decorrelated");
     CHECK(peak < 1.f && peak > 0.02f, "sane level");
-    /* echo density: count samples above a tiny threshold in 50..100 ms */
-    int dense = 0;
-    for (int i = 2400; i < 4800; i++) dense += fabsf(L[i]) > 1e-5f;
-    CHECK(dense > 2000, "dense tail by 50 ms (%d/2400 non-zero samples)", dense);
+    /* normalised echo density (Abel & Huang): ~1 once the tail is noise-like, low while echoes are still discrete */
+    int echoes = 0;
+    for (int i = 960; i < 4800; i++) echoes += fabsf(L[i]) > 1e-3f * peak;
+    CHECK(echoes > 2500, "dense onset: %d of 3840 samples carry echoes in 20..100 ms", echoes);
+    CHECK(ned(L, 7200) > 0.85f && ned(L, 9600) > 0.85f, "tail is noise-like by 150 ms (echo density %.2f, %.2f at 200 ms)", ned(L, 7200), ned(L, 9600));
     if (argc > 1) wav(argv[1], L, R, 48000 * 6);
+    float ac_new, sp_new;
+    ringiness(L, &ac_new, &sp_new);
+    printf("      tallest spectral peak in the tail: %.1f dB above its neighbourhood\n", sp_new);
+    CHECK(ac_new < 0.25f, "no audible repeats in the tail (autocorrelation peak %.2f)", ac_new);
 
     /* width: spread -1 is mono */
     k = defaults(); k.spread = -1.f;

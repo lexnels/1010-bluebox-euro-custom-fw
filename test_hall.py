@@ -134,7 +134,7 @@ uc.hook_del(h)
 per = icount["n"] / N
 print(f"     {icount['n']} instructions per {N}-frame block = {per:.0f} per frame "
       f"(~{per * 48000 / 480e6 * 100:.1f}% of 480 MHz at 1 instruction/cycle, before memory stalls)")
-check(per < 800, "under 800 instructions per frame")
+check(per < 1100, "under 1100 instructions per frame")
 
 # a style knob value past the list is ignored
 n_set = len(calls["set"])

@@ -27,25 +27,22 @@ firmware from 1010music and keep it locally.
 
 ## What's in build `hall`
 
-- **Lush Hall**, a 16th reverb style after Clouds. It runs its own engine (`src/hall_dsp.h`): pre-delay and early
-  reflections, 4 allpasses per side for input diffusion, then an 8-line feedback delay network with slowly
-  modulated delay lines, a two-band decay, damping and an allpass in each line, mixed by an 8x8 Hadamard matrix.
-  It reuses the reverb page's knobs:
+- **Lush Hall**, a 16th reverb style after Clouds. It runs its own engine (`src/hall_dsp.h`): pre-delay, a 3-stage
+  8-channel diffuser (so the onset is a smooth cloud, not discrete echoes), then an 8-line feedback delay network
+  with independently modulated delay lines, a two-band decay, damping and an allpass in each line, mixed by an 8x8
+  Hadamard matrix.
 
-  | knob | in Lush Hall |
+  The reverb page only shows Style, Time, Level, Pre Delay, Low Cut, HI C and Freeze; the stock engine's other
+  params (size, diffusion, modulation and so on) are set inside its presets and never reach the screen. So in Lush
+  Hall those are fixed, tuned values, and the visible controls do this:
+
+  | control | in Lush Hall |
   |---|---|
-  | Size | delay lengths (room size) |
-  | Decay | decay time, 0.3 s to 30 s |
-  | Pre Delay | pre-delay, 0 to 1 s |
-  | ER TM / ER LV | early reflection spacing and level (all the way down = off) |
-  | Diffusion | input diffusion (how quickly the attack smears) |
-  | Feedback | density: diffusion inside the tail |
+  | Time | decay: 0.4 s at the bottom, 3.2 s in the middle (default), 25 s at the top |
+  | Level | output level, like the stock styles |
+  | Pre Delay | pre-delay, up to ~0.65 s |
   | Low Cut | input high-pass, 20 Hz to 1 kHz |
-  | HI C | damping: how fast highs die away, 1 kHz to 20 kHz |
-  | Resonance | bass decay: 0.5x to 2x the decay time below ~250 Hz (middle = same as Decay) |
-  | Mod Freq / Mod Depth | delay-line modulation, 0.05 to 5 Hz, up to ~1 ms (chorus-like lushness) |
-  | Spread | stereo width: left = mono, middle = normal, right = extra wide |
-  | Level | output level |
+  | HI C | tone: brightness of the input and how fast highs die away |
   | Freeze | holds the tail and ignores new input |
 
   Switching to or from Lush Hall mutes the reverb for ~30 audio blocks while the shared delay memory is cleared.

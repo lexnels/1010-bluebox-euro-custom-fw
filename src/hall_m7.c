@@ -102,23 +102,26 @@ static float raw(const struct hall_slot *sl, unsigned id, float def)
     return v == P_UNSET ? def : (float)v;
 }
 
+/* The reverb page only shows Style, Time, Level, Pre Delay, Low Cut, HI C and Freeze; the other reverb params are
+ * set inside the stock presets and never reach the screen. So the hall uses fixed, tuned values for those. */
 static void knobs_from(const struct hall_slot *sl, struct hall_knobs *k)
 {
+    float t = raw(sl, 0x159, 1000.f) * 1e-3f;            /* "Time" 0..2000, 1000 = default */
+    k->decay      = (0.415f + 3.f * t) * (1.f / 6.6438562f);   /* RT60 = 0.4 s x 8^t: 0.4 s, 3.2 s, 25.6 s */
+    k->level      = raw(sl, 0x15a, 1000.f) * 1e-3f;      /* "Level" 0..2000, linear like the stock engine */
     k->predelay_s = raw(sl, 0x13d, 200.f) * 1e-4f;      /* 0..9990, 0.1 ms */
-    k->diffusion  = raw(sl, 0x13e, 700.f) * 1e-3f;
-    k->er_time_s  = raw(sl, 0x13f, 400.f) * 1e-4f;      /* 0..899, 0.1 ms */
-    k->er_db      = raw(sl, 0x140, -12000.f) * 1e-3f;   /* -36000..0, mdB */
-    k->density    = raw(sl, 0x141, 500.f) * 1e-3f;      /* "Feedback" */
-    k->size       = raw(sl, 0x143, 700.f) * 1e-3f;
-    k->decay      = raw(sl, 0x144, 500.f) * 1e-3f;
-    k->level_db   = raw(sl, 0x145, 0.f) * 1e-3f;        /* "Level", mdB */
-    k->spread     = raw(sl, 0x146, 0.f) * 1e-3f;        /* -1000..1000 */
-    k->hicut      = raw(sl, 0x148, 600.f) * 1e-3f;
-    k->lowcut     = raw(sl, 0x14a, 100.f) * 1e-3f;
-    k->bass       = raw(sl, 0x14c, 500.f) * 1e-3f;      /* "Resonance" */
-    k->mod_rate   = raw(sl, 0x14d, 350.f) * 1e-3f;
-    k->mod_depth  = raw(sl, 0x14e, 400.f) * 1e-3f;
+    k->hicut      = raw(sl, 0x148, 1000.f) * 1e-3f;
+    k->lowcut     = raw(sl, 0x14a, 0.f) * 1e-3f;
     k->freeze     = raw(sl, 0x14f, 0.f) >= 1.f;
+    k->size       = 0.8f;
+    k->diffusion  = 1.0f;
+    k->density    = 0.8f;
+    k->er_time_s  = 0.025f;
+    k->er_db      = -36.f;                              /* off: the diffuser already makes the early cloud */
+    k->spread     = 0.25f;
+    k->bass       = 0.6f;
+    k->mod_rate   = 0.4f;                               /* ~0.3 Hz */
+    k->mod_depth  = 0.5f;                               /* ~0.5 ms */
 }
 
 #define MEM_FLOATS 0x40000u        /* the stock engine's delay memory, all of it */
