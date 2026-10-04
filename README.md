@@ -1,6 +1,7 @@
-# bluebox-mod
+# 1010-bluebox-euro-custom-fw
 
-Custom firmware modifications for the 1010music **bluebox** (eurorack version).
+Custom firmware modifications for the 1010music **bluebox eurorack edition**
+(not the desktop bluebox; firmware images differ between the two).
 
 ## Goals
 
@@ -15,5 +16,5 @@ patching the stock firmware image rather than rebuilding from source.
 ## Note on firmware images
 
 The stock firmware is 1010music's property and is **not** included in this repo.
-`*.bin` / `*.BIN` files are git-ignored. Download the official firmware from
-1010music and keep it locally.
+`*.bin` / `*.BIN` files are git-ignored. Download the official eurorack-edition
+firmware from 1010music and keep it locally.
