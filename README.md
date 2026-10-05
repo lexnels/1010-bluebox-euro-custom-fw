@@ -36,7 +36,8 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download `bluebox-mod-<version>-patcher.py` from the [latest release](https://github.com/lexnels/1010-bluebox-euro-custom-fw/releases/latest).
+1. Download [`releases/bluebox-mod-v4-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v4-patcher.py)
+   (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
    python3 bluebox-mod-v4-patcher.py "path/to/BLUEEURO 3.BIN"
@@ -55,7 +56,7 @@ it), and Python 3 (built into macOS; on Windows get it from python.org).
 | v2 | Lush Hall reworked: smoother, Time and Level work |
 | v1 | CPU meter, Lush Hall |
 
-v1 to v3 run on a real unit. v4 is tested in an emulator and not yet on hardware. Only v4 is published as a release.
+v1 to v3 run on a real unit. v4 is tested in an emulator and not yet on hardware. Only v4 has a patcher in `releases/`.
 
 ## Credits and licences
 
@@ -65,8 +66,8 @@ v1 to v3 run on a real unit. v4 is tested in an emulator and not yet on hardware
   reverb core is by Emilie Gillet (Mutable Instruments), MIT.
 - Freeverb by Jezar at Dreampoint, public domain ([sinshu/freeverb](https://github.com/sinshu/freeverb)).
 - The patching approach follows [j3threejay/blackbox-mod](https://github.com/j3threejay/blackbox-mod).
-- The stock firmware is 1010music's property and is not included here, in the repo or in the releases. Releases
-  only carry the mod's own changes.
+- The stock firmware is 1010music's property and is not included here. The patchers in `releases/` only
+  carry the mod's own changes.
 
 ---
 
@@ -118,7 +119,7 @@ python3 test_cpu.py           # runs both hooks under Unicorn (pip install unico
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
-python3 tools/make_patcher.py cpu+hall v4   # -> out/release/bluebox-mod-v4-patcher.py (the release asset)
+python3 tools/make_patcher.py cpu+hall v4   # -> out/release/bluebox-mod-v4-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.
