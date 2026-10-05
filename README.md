@@ -7,7 +7,11 @@
 > responsibility for any damage. Keep your stock firmware file and back up your SD card before installing.
 
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
-differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
+differs). It patches the official firmware and adds features to it. Everything stock still works.
+
+**Based on:** the official bluebox eurorack edition firmware **version 3** from 1010music, the file
+`BLUEEURO 3.BIN` (1,113,628 bytes, SHA-256 `fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b`).
+The patcher only accepts that exact file, so it won't work on other versions.
 
 The CPU meter, reverb and delay additions run on a real unit; the compressor meter and Saturate are tested in an
 emulator so far. Keep your stock firmware file so you can go back at any
@@ -74,7 +78,13 @@ Good to know:
 ## Install
 
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
-it), and Python 3 (built into macOS; on Windows get it from python.org).
+it).
+
+**In your browser (easiest):** open the [web patcher](https://lexnels.github.io/1010-bluebox-euro-custom-fw/), choose
+your stock `BLUEEURO 3.BIN`, and save the `BLUEEURO.BIN` it gives you. The file never leaves your computer: the page
+patches it locally. Then copy it to the microSD card as in step 3 below.
+
+**Or with Python 3** (built into macOS; on Windows get it from python.org):
 
 1. Download [`releases/bluebox-mod-v0.14-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.14-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
@@ -203,6 +213,7 @@ cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
 python3 tools/make_patcher.py cpu+hall+delay+master v0.14   # -> out/release/bluebox-mod-v0.14-patcher.py (copy it to releases/)
+python3 tools/make_web.py     # -> docs/index.html, the browser patcher (GitHub Pages, from main /docs), from the patcher in releases/
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

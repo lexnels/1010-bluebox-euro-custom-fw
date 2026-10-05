@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bluebox eurorack mod patcher</title>
+<meta name="description" content="Patch your own stock 1010music bluebox eurorack firmware with the custom mod, in your browser.">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1b1f24; --muted: #5b6572; --line: #dde1e6;
+    --accent: #1f6feb; --accent-text: #ffffff; --ok: #1a7f37; --bad: #cf222e; --warn-bg: #fff8e5; --warn-line: #e3c45a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --card: #171b21; --text: #e6e9ed; --muted: #9aa4af; --line: #2a3038;
+      --accent: #4c8dff; --accent-text: #0b0d10; --ok: #3fb950; --bad: #ff6b6b; --warn-bg: #2a2410; --warn-line: #7a6420;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px; padding: 12px 14px;
+          font-size: 0.92rem; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  ol { padding-left: 1.2em; margin: 0 0 18px; }
+  li { margin: 4px 0; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center;
+          cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop input { display: none; }
+  .drop strong { color: var(--accent); }
+  #status { min-height: 1.5em; margin: 16px 0 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+  #save { display: none; margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 10px;
+          background: var(--accent); color: var(--accent-text); font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .small { color: var(--muted); font-size: 0.85rem; margin-top: 24px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>bluebox eurorack mod</h1>
+  <p class="sub">Custom firmware {{VERSION}} for the 1010music bluebox eurorack edition, patched in your browser.
+    <a href="https://github.com/lexnels/1010-bluebox-euro-custom-fw">What it adds</a></p>
+
+  <div class="warn"><strong>Install at your own risk.</strong> This is unofficial firmware, not made or supported by
+    1010music. Any custom firmware carries some risk of bricking your module or losing projects. Keep your stock
+    firmware file and back up your SD card first.</div>
+
+  <div class="card">
+    <ol>
+      <li>Get the official bluebox eurorack firmware <strong>version 3</strong> (<code>BLUEEURO 3.BIN</code>) from 1010music.</li>
+      <li>Choose that file below. It stays on your computer: the patching happens in this page.</li>
+      <li>Save <code>BLUEEURO.BIN</code>, copy it to the root of the microSD card and install it like a 1010music update.</li>
+    </ol>
+    <label class="drop" id="drop">
+      <input type="file" id="file">
+      <strong>Choose the stock firmware file</strong><br>or drop it here
+    </label>
+    <p id="status" role="status"></p>
+    <button id="save" type="button">Save BLUEEURO.BIN</button>
+  </div>
+
+  <p class="small">Going back to stock: install your stock firmware file the same way.<br>
+    Stock file SHA-256: <code>{{STOCK_SHA256}}</code></p>
+</main>
+<script>
+const STOCK_SHA256 = "{{STOCK_SHA256}}";
+const MOD_SHA256 = "{{MOD_SHA256}}";
+const PATCH = "{{PATCH}}";
+
+const status = document.getElementById("status"), save = document.getElementById("save");
+const say = (text, cls) => { status.textContent = text; status.className = cls || ""; };
+let url = null;
+
+async function sha256(buf) {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
+  return Array.from(h, b => b.toString(16).padStart(2, "0")).join("");
+}
+async function inflate(b64) {                       // zlib stream, as the Python patcher writes it
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function patch(file) {
+  save.style.display = "none";
+  if (url) { URL.revokeObjectURL(url); url = null; }
+  try {
+    say("Checking " + file.name + " ...");
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (await sha256(data) !== STOCK_SHA256) {
+      say("That isn't the stock version 3 firmware this mod is built for (its fingerprint doesn't match). Nothing was changed.", "bad");
+      return;
+    }
+    const blob = await inflate(PATCH), view = new DataView(blob.buffer);
+    for (let at = 0; at < blob.length; ) {
+      const ofs = view.getUint32(at, true), n = view.getUint32(at + 4, true);
+      data.set(blob.subarray(at + 8, at + 8 + n), ofs);
+      at += 8 + n;
+    }
+    if (await sha256(data) !== MOD_SHA256) {
+      say("Patching went wrong (the result doesn't match). Nothing to save.", "bad");
+      return;
+    }
+    url = URL.createObjectURL(new Blob([data], { type: "application/octet-stream" }));
+    say("Done: patched and checked.", "ok");
+    save.style.display = "block";
+  } catch (e) {
+    say("This browser couldn't patch the file (" + e.message + "). Try a current Chrome, Edge, Firefox or Safari.", "bad");
+  }
+}
+save.onclick = () => {
+  const a = document.createElement("a");
+  a.href = url; a.download = "BLUEEURO.BIN";
+  document.body.appendChild(a); a.click(); a.remove();
+};
+document.getElementById("file").onchange = e => { if (e.target.files[0]) patch(e.target.files[0]); };
+const drop = document.getElementById("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) patch(e.dataTransfer.files[0]); };
+</script>
+</body>
+</html>
