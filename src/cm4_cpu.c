@@ -12,6 +12,7 @@
  *
  * On the settings page, with the master compressor on, the Thresh row gets a blue bar along its bottom edge showing
  * the compressor's gain reduction (src/mst_m7.c publishes it): 0 to 20 dB across the row, ticks every 5 dB.
+ * The UI only redraws when something on screen changes, so comp_tick asks for a redraw while the bar would move.
  */
 #include "cpu_shared.h"
 #include "mst_shared.h"
@@ -21,6 +22,8 @@ typedef void (*flip_fn)(void *display, int layer, int a2, int a3);
 typedef uint8_t *(*backbuf_fn)(void *display, int layer);
 #define fw_flip    ((flip_fn)FN(0x08101384))
 #define fw_backbuf ((backbuf_fn)FN(0x081013d2))
+typedef void (*dirty_fn)(uint8_t *pages, uint8_t *flags);
+#define fw_dirty   ((dirty_fn)FN(0x0813aa9e))
 
 #define BAR_X  314          /* columns 314..316 */
 #define BAR_W  3
@@ -127,6 +130,34 @@ static void draw(const uint8_t *d)
         for (unsigned x = 0; x < BAR_W; x++, p += bpp)
             put(p, fmt, c);
     }
+}
+
+/* The UI loop FUN_08135180 asks the page manager (app + 0x280) which layers need redrawing (FUN_0813aa9e, bl
+ * @0x081351a6, patches/master.py). Its bytes +0x38/+0x39 force layers 0/1, as a page change does. While the bar is
+ * showing, set them whenever the gain reduction changed, at most every 3rd M7 report (~15 fps). */
+struct comp_tick_state { uint32_t magic, seq; uint16_t gr; };
+#define CT ((volatile struct comp_tick_state *)0x38800fc0u)
+#define CT_MAGIC 0x4b434954u
+void comp_tick(uint8_t *pages, uint8_t *flags)
+{
+    bkp_enable();
+    PWR_CR1 |= 1u << 8;             /* backup SRAM writes (the M7 sets it too) */
+    volatile struct mst_meter *m = MST_METER;
+    volatile struct comp_tick_state *t = CT;
+    if (comp_page() && m->magic == MST_MAGIC && m->on) {
+        uint32_t seq = m->seq;
+        uint16_t gr = m->gr;
+        if (t->magic != CT_MAGIC || seq - t->seq >= 3u) {
+            if (t->magic != CT_MAGIC || gr != t->gr) {
+                pages[0x38] = 1;
+                pages[0x39] = 1;
+                t->gr = gr;
+            }
+            t->seq = seq;
+            t->magic = CT_MAGIC;
+        }
+    }
+    fw_dirty(pages, flags);
 }
 
 /* Replaces bl FUN_08101384 @0x0813861a (r0 = display, r1 = layer). */

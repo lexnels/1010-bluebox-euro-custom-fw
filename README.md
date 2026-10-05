@@ -44,7 +44,7 @@ time.
   Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
 - **Compressor meter:** in the settings list, with the master compressor on, the **Thresh** row gets a blue bar along
   its bottom edge showing how much the compressor is turning the master down: 0 to 20 dB across the row, with ticks
-  every 5 dB. Dark when nothing is being compressed.
+  every 5 dB, updating about 15 times a second. Dark when nothing is being compressed.
 - **Master saturator:** a **Saturate** control at the bottom of the settings page (after the compressor's). Saturation
   on the master bus after the compressor, before the master level, so it's in recordings too. At 0 it's off and the
   sound is untouched; low settings round off peaks, and higher ones push up to 36 dB into the clipper for overdrive.
@@ -75,11 +75,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.11-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.11-patcher.py)
+1. Download [`releases/bluebox-mod-v0.12-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.12-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.11-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.12-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -173,7 +173,9 @@ and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the
   the M4 (`src/cm4_cpu.c`, in the flip hook) it's drawn while the settings page (`app + 0x1e9e8`, kind `0xc`) is
   current: the list (`page + 0x9c8`, laid out by `FUN_081400e2`) has rows of 0x330 bytes from `+0xe8` with their rect at
   `+4`, hidden byte `+0x30` and id at `+0x32c`; the bar goes in the bottom 3 px of the visible row with id `0x132`
-  (the label starts 4 px up).
+  (the label starts 4 px up). The UI only redraws what changed, so `comp_tick` wraps the UI loop's redraw check
+  (`FUN_0813aa9e`, `bl` at `0x081351a6`) and sets the page manager's force-redraw bytes (`app + 0x2b8/0x2b9`, as a page
+  change does) when the gain reduction moved, at most every 3rd M7 report (~15 fps).
 - Saturator: `y = x + mix (sat(g x) k - x)`, `g = 2^(6 Drive)` (0 to +36 dB), `k = R / sat(g R)` with R = 0.2
   (-14 dBFS), `sat(x) = x (27 + x^2) / (27 + 9 x^2)` (tanh-like, exactly ±1 from |x| = 3), `mix` fading in over the
   first 5 % of the knob. Changes ramp across a block. Skipped at 0 and on a silent bus. About 1300 instructions per
@@ -198,7 +200,7 @@ cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on t
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
-python3 tools/make_patcher.py cpu+hall+delay+master v0.11   # -> out/release/bluebox-mod-v0.11-patcher.py (copy it to releases/)
+python3 tools/make_patcher.py cpu+hall+delay+master v0.12   # -> out/release/bluebox-mod-v0.12-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

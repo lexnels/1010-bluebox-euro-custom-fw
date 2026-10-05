@@ -235,4 +235,42 @@ check(not m4(True, (100, 1), scroll=0)[1], "Thresh row scrolled out of view: not
 check(not m4(True, (100, 1), scroll=660 + 155)[1], "Thresh row half off the top of the list: nothing drawn")
 check(not m4(True, (100, 0))[1], "compressor off: nothing drawn")
 check(not m4(True, None)[1], "no M7 report yet: nothing drawn")
+
+# ---- M4: comp_tick forces a redraw while the bar would move, ~15 fps
+check(at(0x081351A6, 4) == bl(0x081351A6, s4["comp_tick"]), "UI loop's redraw check -> comp_tick")
+def ticker(page_on=True, on=1):
+    uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
+    uc.mem_map(0x08000000, 0x200000); uc.mem_write(0x08040000, data[:0xA0000]); uc.mem_write(0x08100000, data[0xC0000:])
+    for base, size in [(0x24000000, 0x80000), (0x30000000, 0x48000), (0x38800000, 0x1000), (0x58024000, 0x1000)]:
+        uc.mem_map(base, size)
+    APP = 0x30010000
+    uc.mem_write(0x3000E63C, struct.pack("<I", APP))
+    uc.mem_write(APP + 0x2B4, struct.pack("<I", APP + 0x1E9E8 if page_on else APP + 0x1000))
+    uc.mem_write(APP + 0x1E9E8 + 0xA3E0, struct.pack("<H", 0xC))
+    calls = []
+    def h(uc, a, size, _):
+        p = uc.reg_read(UC_ARM_REG_R0)
+        calls.append(bytes(uc.mem_read(p + 0x38, 2)))
+        uc.mem_write(p + 0x38, bytes(2))                       # the stock check reads and clears them
+        uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+    uc.hook_add(UC_HOOK_CODE, h, begin=0x0813AA9E, end=0x0813AA9E)
+    def tick(seq, gr):
+        uc.mem_write(0x38800F40, struct.pack("<IhHBxxxI", 0x524D4F43, 0, gr, on, seq))
+        uc.reg_write(UC_ARM_REG_R0, APP + 0x280); uc.reg_write(UC_ARM_REG_R1, 0x24001000)
+        uc.reg_write(UC_ARM_REG_SP, 0x2407F000); uc.reg_write(UC_ARM_REG_LR, RET | 1)
+        uc.emu_start(s4["comp_tick"] | 1, RET, count=100000)
+        return calls[-1] == b"\x01\x01"
+    return tick, calls
+tick, calls = ticker()
+seq_gr = [(s, 50 + s) for s in range(1, 31)]                    # GR moving every report, the UI loop polling 4x per report
+forced = [tick(s, g) for s, g in seq_gr for _ in range(4)]
+print(f"     moving GR: {sum(forced)} redraws over {len(seq_gr)} reports ({sum(forced) * 46.875 / len(seq_gr):.1f} fps)")
+check(len(calls) == 120, "stock redraw check still runs every time")
+check(9 <= sum(forced) <= 11, "moving GR: a redraw every 3rd report, ~15 fps")
+forced = [tick(s, 80) for s in range(31, 61) for _ in range(4)]
+check(sum(forced) <= 1, "steady GR: no extra redraws")
+tick, _ = ticker(page_on=False)
+check(not any(tick(s, s) for s in range(1, 30)), "other pages: no extra redraws")
+tick, _ = ticker(on=0)
+check(not any(tick(s, s) for s in range(1, 30)), "compressor off: no extra redraws")
 print("all passed")

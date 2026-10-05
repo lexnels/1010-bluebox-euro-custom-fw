@@ -9,6 +9,7 @@ from thumb import ROOT, bl, symbols, cave
 
 s7 = symbols(os.path.join(ROOT, "out", "mst7.elf"))
 s4 = symbols(os.path.join(ROOT, "out", "dly4.elf"))
+c4 = symbols(os.path.join(ROOT, "out", "cm4.elf"))
 code7 = cave("mst7")
 
 PATCHES = [
@@ -19,4 +20,7 @@ PATCHES = [
     (0x08120B90, bl(0x08120B90, 0x081205E2), bl(0x08120B90, s4["mst_set_add"])),
     # M4: the settings page's id list (0x0814d91c, 0-terminated, after the compressor's 0xb5, 0x130..0x13b): + 0x43
     (0x0814D966, bytes(2), struct.pack("<H", 0x43)),
+    # M4: UI loop FUN_08135180, its redraw check FUN_0813aa9e -> comp_tick (src/cm4_cpu.c), which keeps the settings
+    # list's gain-reduction bar moving
+    (0x081351A6, bl(0x081351A6, 0x0813AA9E), bl(0x081351A6, c4["comp_tick"])),
 ]
