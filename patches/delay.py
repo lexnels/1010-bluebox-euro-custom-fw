@@ -1,4 +1,4 @@
-"""FX1 delay: Flutter, Send to Reverb, Low Cut and High Cut (in place of the band-pass), toggles right of the knobs.
+"""FX1 delay: Resonance, Pitch (with its on/off button), Flutter and Send to Reverb; FILT and PITCH right of the knobs.
 
 M7 code is in src/dly_m7.h (built into the hall cave, out/hall7), M4 code in src/dly_m4.c (out/dly4). Needs the hall
 patchset too: the send reaches the reverb through hall_process, and the panel page limit it raises is shared.
@@ -14,18 +14,18 @@ def u32(v):
     return struct.pack("<I", v)
 
 # M4: the delay slot's param list (FUN_0812060c, case 4 @0x08120bba, 98 bytes up to case 5), the same table loop as
-# the reverb's. List order is screen order: 5 columns of 2, column-major; knobs first, so the toggles end up on the
-# right. Cutoff (0x0e), Width (0xcb) and Filt (0xca) are gone: Low Cut and High Cut replace that filter.
+# the reverb's. List order is screen order: columns of 2, column-major; knobs first, so the toggles end up on the
+# right, in the fifth column like the reverb's Freeze. The panel draws 10, so BEAT, PING and QUAD are left off it (and
+# 0x34, the beat-synced time, with BEAT); dly_process holds them at ms time, ping-pong on, QUAD off.
 LIST_AT = 0x08120BBA
 LIST_STOCK = bytes.fromhex(
     "4ff4c87233212046fff70efd4ff4c87239212046fff708fd78220e212046fff703fd4ff47a72cb212046fff7fdfc"
     "012235212046fff7f8fc0122ca212046fff7f3fc012236212046fff7eefc002237212046fff7e9fc062234212046fff7e4fc37e6")
 LIST_IDS = [(0x33, 400), (0x39, 400),       # column 1: Delay, Feedback
-            (0x43, 200), (0x4A, 600),       # column 2: Low Cut (~50 Hz), High Cut (~4.6 kHz)
-            (0x3A, 0), (0x3D, 0),           # column 3: Flutter, Send (to reverb)
-            (0x35, 1), (0x36, 1),           # column 4: BEAT (sync), PING
-            (0x37, 0),                      # column 5: QUAD (shown only in 3&4 mode)
-            (0x34, 6)]                      # the beat-synced time (1/4T): stands in for Delay when BEAT is on
+            (0x0E, 120), (0xCB, 1000),      # column 2: Cutoff, Width (stock band-pass)
+            (0x43, 0), (0x4A, 12),          # column 3: Resonance, Pitch (+12 semitones)
+            (0x3A, 0), (0x3D, 0),           # column 4: Flutter, Send (to reverb)
+            (0xCA, 1), (0x4B, 0)]           # column 5: FILT, PITCH (on/off); BEAT, PING, QUAD are fixed on M7
 LIST_CODE = bytes.fromhex(
     "48b4"          # push {r3, r6}
     "06a6"          # adr r6, table (0x08120bd8)
@@ -57,6 +57,6 @@ PATCHES = [
     (0x0806BA70, u32(0x08053B31), u32(s7["dly_process"] | 1)),
     # M7: the four S0 line reads (bl FUN_08059d54) -> dly_read (flutter)
     *[(a, bl(a, 0x08059D54), bl(a, s7["dly_read"])) for a in (0x08053574, 0x08053594, 0x08053816, 0x080538EC)],
-    # M7: the band-pass calls (bl FUN_08056dd8) -> dly_tone (Low Cut, High Cut)
+    # M7: the band-pass calls (bl FUN_08056dd8) -> dly_tone (Resonance after the stock band-pass)
     *[(a, bl(a, 0x08056DD8), bl(a, s7["dly_tone"])) for a in (0x08053602, 0x08053610)],
 ]

@@ -57,8 +57,9 @@ uc.emu_start(0x08120BBA | 1, 0x0812088C, count=1000)
 uc.hook_del(h)
 check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) == SET and uc.reg_read(UC_ARM_REG_R5) == 0x1234
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 delay list: reaches the common tail with r4, r5, sp intact")
-check(added == [(0x33, 400), (0x39, 400), (0x43, 200), (0x4A, 600), (0x3A, 0), (0x3D, 0), (0x35, 1), (0x36, 1), (0x37, 0), (0x34, 6)],
-      "M4 delay list: Delay, Feedback, Low Cut, High Cut, Flutter, Send, then BEAT, PING, QUAD")
+check(added == [(0x33, 400), (0x39, 400), (0x0E, 120), (0xCB, 1000), (0x43, 0), (0x4A, 12), (0x3A, 0), (0x3D, 0),
+                (0xCA, 1), (0x4B, 0)],
+      "M4 delay list: Delay, Feedback, Cutoff, Width, Resonance, Pitch, Flutter, Send, then FILT, PITCH")
 
 # ---- M4: param definitions (the last stock one, then ours)
 defs = []
@@ -73,8 +74,9 @@ STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 call(s4["dly_defs"], 0x24032000, 0x117, 5, STR, stack=(-7, 9, STR + 8))
 uc.hook_del(h)
 check(defs == [(0x117, 5, "Lbl:", -7, 9, "key"), (0x3A, 8, "Flutter:", 0, 1000, "dlyflutter"), (0x3D, 8, "Send:", 0, 1000, "dlysend"),
-               (0x43, 8, "Low Cut:", 0, 1000, "dlylowcut"), (0x4A, 8, "High Cut:", 0, 1000, "dlyhicut")],
-      "M4 param table: the stock definition passes through, then Flutter, Send, Low Cut, High Cut")
+               (0x43, 8, "Resonance:", 0, 1000, "dlyreso"), (0x4A, 8, "Pitch:", -12, 12, "dlypitch"),
+               (0x4B, 4, "Pitch:", 0, 1, "dlypitchon")],
+      "M4 param table: the stock definition passes through, then Flutter, Send, Resonance, Pitch, Pitch on/off")
 def bl_target(at):
     o = at - 0x08040000 if at < 0x08100000 else at - 0x08100000 + 0xC0000
     h1, h2 = struct.unpack_from("<HH", data, o)
@@ -112,41 +114,78 @@ def block(inl, inr=None):
     r = call(0x08053B30 if False else s7["dly_process"], OBJ, CTX)
     events([])
     return rd(BUFS, f"<{N}f"), rd(BUFS + 0x100, f"<{N}f"), r
+R = []                                                               # right channel of the last run
 def run(sig, blocks):
-    out = []
+    out = []; R.clear()
     for b in range(blocks):
         l, r, _ = block([sig(b * N + i) for i in range(N)])
-        out += l
+        out += l; R.extend(r)
     return out
 
 T = 2880                                                             # Delay 10: 10/1000 x 288000 samples
-events([("on", 0), (0x35, 0), (0x36, 0), (0x33, 10), (0x39, 500), (0x43, 0), (0x4A, 1000), (0x3A, 0), (0x3D, 0)])
+STASH_N = 0x38800D00 + 4 + 4 + 24 + 20 + 16 + 20 + 8 + 4             # struct dly_shared .stash_n
+events([("on", 0), (0x33, 10), (0x39, 500), (0xCA, 0), (0x43, 0), (0x4A, 12), (0x4B, 0),
+        (0x3A, 0), (0x3D, 0)])
 _, _, r = block([0.0] * N)
 check(r == 1, "dly_process returns like the stock process (no next node)")
-check(rd(OBJ + 0x270, "<B")[0] == 1, "Filt forced on, so the tone hook runs")
 run(lambda t: 0.0, (288000 - T) // 16 + 200)                         # let the stock read glide to the new time
 out = run(lambda t: 1.0 if t == 0 else 0.0, 12000 // N)
 pk = max(range(len(out)), key=lambda i: abs(out[i]))
-# area over 50 samples (the 20 kHz low-pass lowers an impulse's peak; the 20 Hz high-pass takes ~15 % off this window)
-e1, e2 = sum(out[T - 10:T + 40]), sum(out[2 * T - 10:2 * T + 40])
-print(f"     open filters: first echo peak at {pk}, area {e1:.3f}, second {e2:.3f}")
-check(abs(pk - T) <= 3 and 0.8 < e1 < 1.05 and 0.38 < e2 / e1 < 0.5, "open cuts: echoes at the delay time, halving with Feedback 500")
-check(max(abs(x) for x in out[:T - 10]) < 1e-6, "wet only: nothing before the first echo")
+echoes = lambda x: [(i, round(v, 3)) for i, v in enumerate(x) if abs(v) > 1e-3][:4]
+print(f"     Filt off: echoes L {echoes(out)}, R {echoes(R)}")
+check(echoes(out) == [(T, 1.0), (8608, 0.5)] and echoes(R) == [(2 * T, 1.0), (4 * T, 0.5)], "Filt off, Pitch off: the stock ping-pong echoes, untouched, Delay in ms (BEAT held off)")
+events([(0x35, 1)])                                                  # a stray BEAT on (the panel no longer sends it)
+run(lambda t: 0.0, (288000 - T) // 16 + 200)
+out = run(lambda t: 1.0 if t == 0 else 0.0, 12000 // N)
+check(echoes(out) == [(T, 1.0), (8608, 0.5)] and echoes(R) == [(2 * T, 1.0), (4 * T, 0.5)], "BEAT stays off, ping-pong stays on")
+check(max(abs(x) for x in out[:T - 1]) < 1e-6, "wet only: nothing before the first echo")
 
-# High Cut at 0 (500 Hz): the echo is a soft bump, much lower than open
-events([(0x4A, 0)])
+# the stock band-pass with Filt on, then Resonance: ringing at the Cutoff lasts longer, and stays bounded
+def ring_energy(x, a, b): return sum(v * v for v in x[a:b])
+events([(0xCA, 1), (0x0E, 500), (0xCB, 0), (0x39, 0)])               # centre 80 Hz x 2^3.5 = 905 Hz, half an octave wide
 run(lambda t: 0.0, 400)
 out = run(lambda t: 1.0 if t == 0 else 0.0, 4000 // N)
-dark = max(abs(x) for x in out)
-print(f"     High Cut 0: first echo peak {dark:.3f}")
-check(dark < 0.15, "High Cut darkens the echo")
-# Low Cut at 1000 (2 kHz): a held DC input gives (almost) no echo
-events([(0x4A, 1000), (0x43, 1000), (0x39, 0)])
+e0 = ring_energy(out, T + 200, T + 1200) / max(1e-12, ring_energy(out, T, T + 1200))
+events([(0x43, 1000)])
 run(lambda t: 0.0, 400)
-out = run(lambda t: 1.0, 12000 // N)
-dc = max(abs(x) for x in out[T + 500:])                              # after the step's own short click
-print(f"     Low Cut 1000, DC in: echo {dc:.4f}")
-check(dc < 0.02, "Low Cut removes the lows")
+out = run(lambda t: 1.0 if t == 0 else 0.0, 4000 // N)
+e1 = ring_energy(out, T + 200, T + 1200) / max(1e-12, ring_energy(out, T, T + 1200))
+print(f"     share of the echo's energy ringing after 4 ms: {e0 * 100:.1f} % without Resonance, {e1 * 100:.1f} % with")
+check(e1 > 2 * e0, "Resonance makes the band ring longer")
+events([(0x39, 1000)])
+out = run(lambda t: 0.3 * math.sin(2 * math.pi * 905 * t / 48000) if t < 4800 else 0.0, 4 * 48000 // N)
+check(all(math.isfinite(x) for x in out) and max(abs(x) for x in out) <= 2.0, f"full Resonance and Feedback: rings, bounded (peak {max(abs(x) for x in out):.2f})")
+events([(0x43, 0), (0xCA, 0), (0x39, 0)])
+run(lambda t: 0.0, 4 * 48000 // N)
+
+# Pitch: a 480 Hz tone (a whole number of cycles per grain, so grain seams don't skew the measured frequency); +12 with the switch on: the first echo is an octave up, the second (fed back) two
+def freq(x):                                                          # strongest DFT bin, 2 Hz steps
+    import cmath
+    def mag(f): return abs(sum(v * cmath.exp(-2j * math.pi * f * i / 48000) for i, v in enumerate(x)))
+    c = max(range(100, 4000, 25), key=mag)
+    return max(range(c - 26, c + 27, 2), key=mag)
+tone = lambda t: 0.5 * math.sin(2 * math.pi * 480 * t / 48000) if t < 2000 else 0.0
+events([(0x4B, 1), (0x39, 700)])
+run(lambda t: 0.0, 10)
+out = run(tone, 12800 // N)                                          # the shifter adds up to 50 ms per pass
+f1 = freq(out[T + 900:T + 2900]); f2 = freq(out[8608 + 1700:8608 + 3500])   # ping-pong: L's next echo, pitched twice
+print(f"     Pitch +12: first echo {f1:.0f} Hz, second {f2:.0f} Hz")
+check(abs(f1 - 960) < 6 and abs(f2 - 1920) < 12, "Pitch +12: each repeat an octave above the last")
+events([(0x4A, -7)])
+run(lambda t: 0.0, 3 * 48000 // N)
+out = run(tone, 6000 // N)
+f1 = freq(out[T + 900:T + 2900])
+print(f"     Pitch -7: first echo {f1:.0f} Hz")
+check(abs(f1 - 480 * 2 ** (-7 / 12)) < 8, "Pitch -7: a fifth down")
+events([(0x4B, 0)])
+run(lambda t: 0.0, 3 * 48000 // N)
+out = run(tone, 6000 // N)
+check(abs(freq(out[T + 100:T + 1900]) - 480) < 4, "Pitch switch off: echoes at the original pitch")
+events([(0x4B, 1), (0x37, 1)])
+run(lambda t: 0.0, 10)
+check(rd(OBJ + 0x276, "<B")[0] == 0 and rd(STASH_N + 4 + 2 * 4 * N, "<I")[0] == 1, "a stray QUAD on: QUAD stays off, pitch keeps lines E and F")
+events([(0x39, 0)])
+run(lambda t: 0.0, (288000 - T) // 16 + 200)
 
 # Flutter: a held 1 kHz sine through the delay; the echo's zero-crossing spacing wobbles with Flutter, not without
 def crossings(x):
@@ -154,8 +193,7 @@ def crossings(x):
     d = [b - a for a, b in zip(z, z[1:])]
     m = sum(d) / len(d)
     return m, max(abs(v - m) for v in d)
-events([(0x43, 0), (0x39, 0), (0x3A, 0)])
-run(lambda t: 0.0, 400)
+events([(0x4B, 0), (0x3A, 0)])
 out = run(lambda t: math.sin(2 * math.pi * 1000 * t / 48000), 2 * 48000 // N)
 m0, dev0 = crossings(out[T + 1000:])
 events([(0x3A, 1000)])
@@ -165,32 +203,24 @@ print(f"     1 kHz period {m0:.3f} samples, wobble {dev0 / m0 * 100:.3f} % witho
 check(dev0 / m0 < 0.0005 and 0.003 < dev1 / m1 < 0.02, "Flutter wobbles the pitch slowly (under 2 %)")
 check(all(math.isfinite(x) and abs(x) < 1.5 for x in out), "Flutter: output stays clean")
 
-# cost: our additions on top of the stock body, flutter and send on
+# cost: our additions on top of the stock body, with everything on
 icount = {"n": 0}
 def count(uc, a, s, _): icount["n"] += 1
-events([(0x3D, 500)])
+events([(0x3D, 500), (0x4B, 1), (0x4A, 12), (0xCA, 1), (0x43, 800)])
 block([0.1] * N)
 h = uc.hook_add(UC_HOOK_CODE, count, begin=0x08000000, end=0x081FFFFF)
 block([0.1] * N)
-ours = icount["n"]; icount["n"] = 0
+ours = icount["n"]
 uc.hook_del(h)
-uc.mem_write(OBJ + 0x270, b"\0")
-h = uc.hook_add(UC_HOOK_CODE, count, begin=0x08000000, end=0x081FFFFF)
-call(0x08053234, OBJ, CTX)          # the stock body alone, filter off (no hooks reached but the reads)
-stock = icount["n"]
-uc.hook_del(h)
-print(f"     delay: {ours / N:.0f} instructions per frame with the additions, stock body alone {stock / N:.0f}")
-check((ours - stock) / N < 250, "the additions cost under 250 instructions per frame")
+print(f"     delay: {ours / N:.0f} instructions per frame with everything on")
+check(ours / N < 600, "under 600 instructions per frame with everything on")
 
 # Send: Send x the wet output is kept for the reverb's next block
-DS = 0x38800D00
-events([(0x3D, 1000), (0x3A, 0)])
+events([(0x3D, 1000), (0x3A, 0), (0x4B, 0)])
 block([0.0] * N)
-l, r, _ = block([0.0] * N)
-n = rd(DS + 4 + 4 + 16 + 8 + 40 + 32 + 20 + 8 + 4, "<I")[0]
-check(n == N, "Send: the block's wet output is kept for the reverb")
+block([0.0] * N)
+check(rd(STASH_N, "<I")[0] == N, "Send: the block's wet output is kept for the reverb")
 events([(0x3D, 0)])
 block([0.0] * N); block([0.0] * N)
-n = rd(DS + 4 + 4 + 16 + 8 + 40 + 32 + 20 + 8 + 4, "<I")[0]
-check(n == 0, "Send 0: nothing kept")
+check(rd(STASH_N, "<I")[0] == 0, "Send 0: nothing kept")
 print("all passed")
