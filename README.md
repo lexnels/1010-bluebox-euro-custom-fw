@@ -42,13 +42,14 @@ time.
   BEAT and PING sit in a column to the left of the knobs; FILT is under Send, and PITCH and QUAD (3&4 mode) are in
   the column on the right.
   Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
-- **Compressor meter:** while the settings page is open and the master compressor is on, the CPU meter's bar shows
-  the compressor's input level against its threshold instead: from 30 dB below (bottom) to 12 dB above (top). Green
-  below the threshold, red once it reaches or passes it; a white tick marks the threshold while the level is under it.
-- **Master saturator:** a **Saturate** control at the bottom of the settings page (after the compressor's). A soft,
-  tape-like clipper on the master bus after the compressor, before the master level. At 0 it's off and the sound is
-  untouched; turning it up lifts and rounds the quieter parts (up to about +17 dB at full on a -20 dB signal) while
-  full scale stays at full scale. It's saved with the project like the other settings.
+- **Compressor meter:** in the settings list, with the master compressor on, the **Thresh** row gets a blue bar along
+  its bottom edge showing how much the compressor is turning the master down: 0 to 20 dB across the row, with ticks
+  every 5 dB. Dark when nothing is being compressed.
+- **Master saturator:** a **Saturate** control at the bottom of the settings page (after the compressor's). Saturation
+  on the master bus after the compressor, before the master level, so it's in recordings too. At 0 it's off and the
+  sound is untouched; low settings round off peaks, and higher ones push up to 36 dB into the clipper for overdrive.
+  The level is compensated as it goes up: peaks top out at -14 dBFS, so a full mix gets quieter rather than louder
+  (quiet material still comes up some, as with any saturation). It's saved with the project like the other settings.
   Source: [`src/mst_m7.c`](src/mst_m7.c).
 
 The panels, two columns per encoder page:
@@ -74,11 +75,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.10-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.10-patcher.py)
+1. Download [`releases/bluebox-mod-v0.11-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.11-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.10-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.11-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -167,12 +168,16 @@ picks up Saturate (id `0x43`) from the compressor's queue, runs the stock compre
 so it doesn't chain, reads its state (detector envelope at `+0xbc`/`+0xd4`, gain at `+0xc0`/`+0xd8`, threshold `+0xf4`
 and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the bus, then runs the next node.
 
-- Meter: every 32 blocks (about 21 ms) the loudest level over the threshold and the most gain reduction go to backup
-  SRAM at `0x38800f40` (`src/mst_shared.h`). The M4's CPU meter (`src/cm4_cpu.c`) draws that instead of the load while
-  the settings page (`app + 0x1e9e8`, kind `0xc`) is the current page and the compressor is on.
-- Saturator: `y = sat(a x) / sat(a)`, `a = 8 Drive^2`, `sat(x) = x (27 + x^2) / (27 + 9 x^2)` (a tanh-like curve,
-  exactly ±1 from |x| = 3). Changes ramp across a block. Skipped at 0 and on a silent bus. About 1400 instructions
-  per 32-sample block.
+- Meter: the compressor's own gain reduction, `MK - min(LG_L, LG_R)` (no extra detection), maxed over 32 blocks
+  (about 21 ms) and written to backup SRAM at `0x38800f40` (`src/mst_shared.h`); about 160 instructions per block. On
+  the M4 (`src/cm4_cpu.c`, in the flip hook) it's drawn while the settings page (`app + 0x1e9e8`, kind `0xc`) is
+  current: the list (`page + 0x9c8`, laid out by `FUN_081400e2`) has rows of 0x330 bytes from `+0xe8` with their rect at
+  `+4`, hidden byte `+0x30` and id at `+0x32c`; the bar goes in the bottom 3 px of the visible row with id `0x132`
+  (the label starts 4 px up).
+- Saturator: `y = x + mix (sat(g x) k - x)`, `g = 2^(6 Drive)` (0 to +36 dB), `k = R / sat(g R)` with R = 0.2
+  (-14 dBFS), `sat(x) = x (27 + x^2) / (27 + 9 x^2)` (tanh-like, exactly ±1 from |x| = 3), `mix` fading in over the
+  first 5 % of the knob. Changes ramp across a block. Skipped at 0 and on a silent bus. About 1300 instructions per
+  32-sample block. No oversampling, so at high Drive there's some aliasing on bright material.
 - Saturate is defined in the M4 param table next to the delay's (`src/dly_m4.c`, key `mstdrive`), added to the global
   param set after its last entry (`bl` at `0x08120b90` -> `mst_set_add`), and appended to the settings page's id list
   (`0x0814d966`).
@@ -193,7 +198,7 @@ cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on t
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
-python3 tools/make_patcher.py cpu+hall+delay+master v0.10   # -> out/release/bluebox-mod-v0.10-patcher.py (copy it to releases/)
+python3 tools/make_patcher.py cpu+hall+delay+master v0.11   # -> out/release/bluebox-mod-v0.11-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

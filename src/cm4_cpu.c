@@ -10,9 +10,8 @@
  * The bar fills from the bottom with the average load: green, amber above 70 %, red above 90 %.
  * The peak shows as one white row. No data from the M7 yet: nothing is drawn.
  *
- * While the settings page is open and the master compressor is on, the same bar shows the compressor instead
- * (src/mst_m7.c publishes it): its detector level against the threshold, from 30 dB below (bottom) to 12 dB above
- * (top). Green up to the threshold, red past it; the threshold row is white while the level is below it.
+ * On the settings page, with the master compressor on, the Thresh row gets a blue bar along its bottom edge showing
+ * the compressor's gain reduction (src/mst_m7.c publishes it): 0 to 20 dB across the row, ticks every 5 dB.
  */
 #include "cpu_shared.h"
 #include "mst_shared.h"
@@ -55,6 +54,43 @@ static int comp_page(void)
     return page == app + 0x1e9e8u && *(volatile uint16_t *)(page + 0xa3e0u) == 0xc;
 }
 
+/* The settings list (page + 0x9c8, FUN_081400e2 lays it out): rect at +4 {x, y, w, h}, rows of 0x330 bytes from +0xe8,
+ * row count at +0x99e8. Each row: rect at +4 (y-up, 28 px high, 30 px pitch), hidden byte +0x30, param id at +0x32c.
+ * Its label sits 4 px above the row's bottom edge, so the bottom 3 px are free for the bar. */
+#define GR_FULL 200         /* 0.1 dB at full width */
+static void comp_draw(uint8_t *px, unsigned w, unsigned fmt, unsigned bpp)
+{
+    volatile struct mst_meter *m = MST_METER;
+    if (!comp_page() || m->magic != MST_MAGIC || !m->on)
+        return;
+    uint32_t list = *(volatile uint32_t *)(*(volatile uint32_t *)0x3000e63cu + 0x2b4u) + 0x9c8u;
+    const volatile int32_t *lr = (const volatile int32_t *)(list + 4);
+    uint32_t n = *(volatile uint32_t *)(list + 0x99e8u);
+    if (n > 48u)
+        return;
+    for (uint32_t k = 0; k < n; k++) {
+        uint32_t row = list + 0xe8u + k * 0x330u;
+        if (*(volatile uint16_t *)(row + 0x32cu) != 0x132u)
+            continue;
+        const volatile int32_t *rr = (const volatile int32_t *)(row + 4);
+        int x0 = rr[0], y = rr[1], rw = rr[2];
+        if (*(volatile uint8_t *)(row + 0x30u) || y < lr[1] || y + 28 > lr[1] + lr[3] || y < 0 || y + 28 > 240 ||
+            x0 < 0 || rw <= 0 || x0 + rw > 320)
+            return;
+        int gr = m->gr;
+        if (gr > GR_FULL) gr = GR_FULL;
+        int fill = gr * rw / GR_FULL;
+        for (int r = 0; r < 3; r++) {
+            uint8_t *p = px + ((unsigned)(239 - y - r) * w + (unsigned)x0) * bpp;
+            for (int x = 0; x < rw; x++, p += bpp) {
+                int tick = x > 0 && (x * 4) % rw < 4;              /* every 5 dB */
+                put(p, fmt, x < fill ? rgb(40, 150, 255) : tick ? rgb(80, 100, 150) : rgb(20, 32, 64));
+            }
+        }
+        return;
+    }
+}
+
 static void draw(const uint8_t *d)
 {
     if (!d)
@@ -70,23 +106,7 @@ static void draw(const uint8_t *d)
         return;
 
     bkp_enable();
-    if (comp_page()) {
-        volatile struct mst_meter *m = MST_METER;
-        if (m->magic == MST_MAGIC && m->on) {
-            int over = m->over;                                    /* 0.1 dB above the threshold */
-            int lit = (over + 300) * BAR_H / 420;                  /* rows lit from the bottom */
-            int thr = 300 * BAR_H / 420;                           /* the threshold's row from the bottom */
-            for (int k = 0; k < BAR_H; k++) {
-                unsigned row = BAR_Y0 + BAR_H - 1u - (unsigned)k;
-                uint32_t c = k < lit ? (k >= thr ? rgb(255, 40, 40) : rgb(0, 200, 80))
-                                     : k == thr ? rgb(255, 255, 255) : rgb(48, 48, 48);
-                uint8_t *p = px + (row * w + BAR_X) * bpp;
-                for (unsigned x = 0; x < BAR_W; x++, p += bpp)
-                    put(p, fmt, c);
-            }
-            return;
-        }
-    }
+    comp_draw(px, w, fmt, bpp);
     volatile struct cpu_shared *s = CPU_SHARED;
     if (s->magic != CPU_MAGIC)
         return;

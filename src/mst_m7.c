@@ -5,9 +5,9 @@
  * the firmware. Its process FUN_08042a90 (vtable slot 3, 0x0806acbc) is replaced by mst_process, which
  *   - picks up Drive (id 0x43, 0..1000) from the compressor's queue (the stock loop ignores unknown ids);
  *   - runs the stock compressor alone (next node cleared for the call, so it doesn't chain);
- *   - publishes, every ~20 ms, how far its detector went past the threshold and the most gain reduction, for the
- *     M4 to draw (src/mst_shared.h);
- *   - saturates the master bus (Drive > 0), then runs the next node (master level, meters, click, output).
+ *   - publishes, every ~20 ms, the most gain reduction it applied, for the M4 to draw (src/mst_shared.h);
+ *   - saturates the master bus (Drive > 0), then runs the next node (master level, meters, click, output; the
+ *     recorder and USB take bus 12 after those, so the saturation is in recordings).
  * So the saturator sits after the compressor (also when it is off) and before the master level.
  *
  * Compressor object (unlinked stereo, per side L at +0xbc, R at +0xd4): +0 detector envelope (linear), +4 smoothed
@@ -35,6 +35,7 @@ typedef unsigned (*port_fn)(uint8_t *obj);
 #define M_DRIVE 0x43
 #define M_MAXN 32u
 #define REPORT_BLOCKS 32u           /* ~21 ms */
+#define SAT_REF 0.2f                /* -14 dBFS: the peak level Saturate keeps in place */
 
 struct fw_ev { uint8_t type, _p0[11]; uint16_t id, _p1; int32_t value; uint32_t _p2; };
 struct bus { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo; };
@@ -42,20 +43,20 @@ struct bus { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo; };
 struct mst_state {
     uint32_t magic;
     int32_t drive;
-    float g;                        /* saturator curve amount a now (0 = off) */
-    float over, gr;                 /* worst since the last report, log2 units */
+    float g, mix;                   /* saturator now: input gain, wet amount (mix 0 = off) */
+    float gr;                       /* most gain reduction since the last report, log2 units */
     uint32_t blocks;
 };
 #define MS ((volatile struct mst_state *)0x38800f60u)
 #define MS_MAGIC 0x5453414du
 
-static float log2f_(float x)        /* x > 0, ~1e-4 */
+static float exp2f_(float x)        /* 0 <= x < 8 */
 {
-    union { float f; uint32_t u; } v = { x };
-    float e = (float)(int32_t)((v.u >> 23) & 0xff) - 127.f;
-    v.u = (v.u & 0x007fffffu) | 0x3f800000u;     /* 1 <= m < 2 */
-    float m = v.f - 1.f;
-    return e + m * (1.4425449f + m * (-0.7181452f + m * (0.4575485f + m * (-0.2779042f + m * (0.1217970f + m * -0.0258411f)))));
+    int i = (int)x;
+    float f = x - (float)i;
+    union { float f; uint32_t u; } v = { 1.f + f * (0.6931472f + f * (0.2402265f + f * (0.0555041f + f * (0.0096181f + f * 0.0013334f)))) };
+    v.u += (uint32_t)i << 23;
+    return v.f;
 }
 /* soft clip, tanh-like: x (27 + x^2) / (27 + 9 x^2), exactly +-1 from |x| = 3 */
 static float sat(float x)
@@ -70,12 +71,10 @@ static void report(volatile struct mst_state *s, int on)
 {
     PWR_CR1 |= 1u << 8;
     volatile struct mst_meter *m = MST_METER;
-    float over = s->over * 60.206f, gr = s->gr * 60.206f;    /* log2 units -> 0.1 dB */
-    if (over < -1200.f) over = -1200.f;
-    if (over > 1200.f) over = 1200.f;
+    float gr = s->gr * 60.206f;                             /* log2 units -> 0.1 dB */
     if (gr < 0.f) gr = 0.f;
     if (gr > 1200.f) gr = 1200.f;
-    m->over = (int16_t)over;
+    m->over = 0;
     m->gr = (uint16_t)gr;
     m->on = (uint8_t)on;
     m->seq = m->seq + 1;
@@ -83,7 +82,6 @@ static void report(volatile struct mst_state *s, int on)
     __asm volatile("dsb" ::: "memory");
     SCB_DCCMVAC = (uint32_t)m;
     __asm volatile("dsb\n isb" ::: "memory");
-    s->over = -100.f;
     s->gr = 0.f;
     s->blocks = 0;
 }
@@ -96,8 +94,8 @@ unsigned mst_process(uint8_t *obj, void *ctx)
     volatile struct mst_state *s = MS;
     if (s->magic != MS_MAGIC) {
         s->drive = 0;
-        s->g = 0.f;
-        s->over = -100.f;
+        s->g = 1.f;
+        s->mix = 0.f;
         s->gr = 0.f;
         s->blocks = 0;
         s->magic = MS_MAGIC;
@@ -116,47 +114,44 @@ unsigned mst_process(uint8_t *obj, void *ctx)
     /* meter */
     int on = obj[0x28] == 0;
     if (on) {
-        float env = *(float *)(obj + 0xbc), env_r = *(float *)(obj + 0xd4);
-        if (env_r > env) env = env_r;
-        float over = (env > 1e-9f ? log2f_(env) : -30.f) - *(float *)(obj + 0xf4);
         float g = *(float *)(obj + 0xc0), g_r = *(float *)(obj + 0xd8);
         if (g_r < g) g = g_r;
         float gr = *(float *)(obj + 0xfc) - g;
-        if (over > s->over) s->over = over;
         if (gr > s->gr) s->gr = gr;
     }
     if (++s->blocks >= REPORT_BLOCKS)
         report(s, on);
 
-    /* saturator: y = sat(a x) / sat(a), a = 8 Drive^2. Full scale stays full scale; below it the curve lifts and
-     * rounds the signal more as Drive goes up (quiet parts up to +18 dB louder at full Drive: denser, louder). At
-     * small Drive it is nearly a straight line, so turning it up from 0 doesn't jump. */
+    /* saturator: y = x + mix (sat(g x) k - x), g = 2^(6 Drive) (up to +36 dB into the curve), k = R / sat(g R).
+     * k keeps a peak of R (-14 dBFS) where it was, so a full mix gets a little quieter as Drive goes up: quieter parts
+     * are lifted less, louder ones are squashed down, and at full Drive the output tops out at -14 dBFS. mix fades
+     * the effect in over the first 5 % of the knob so leaving 0 doesn't jump. */
     float d = (float)s->drive * 1e-3f;
     if (d < 0.f) d = 0.f;
     if (d > 1.f) d = 1.f;
-    float a1 = 8.f * d * d, a0 = s->g;
-    s->g = a1;
+    float g1 = exp2f_(6.f * d), k1 = SAT_REF / sat(g1 * SAT_REF), mix1 = d * 20.f;
+    if (mix1 > 1.f) mix1 = 1.f;
+    float g0 = s->g, mix0 = s->mix;
+    s->g = g1; s->mix = mix1;
     port_fn port = (*(port_fn **)obj)[0x54 / 4];
     struct bus *b = (struct bus *)fw_bus(ctx, port(obj));
-    if ((a0 > 1e-3f || a1 > 1e-3f) && b && !b->silent) {
+    if ((mix0 > 0.f || mix1 > 0.f) && b && !b->silent) {
         unsigned n = fw_frames(b);
         if (n > M_MAXN) n = M_MAXN;
         float *l, *r;
         fw_stereo(b, &l, &r);
-        if (a0 < 1e-3f) a0 = 1e-3f;
-        if (a1 < 1e-3f) a1 = 1e-3f;
-        if (a0 == a1) {
-            float k = 1.f / sat(a1);
+        if (g0 == g1 && mix0 == mix1) {
             for (unsigned i = 0; i < n; i++) {
-                l[i] = sat(l[i] * a1) * k;
-                r[i] = sat(r[i] * a1) * k;
+                l[i] += mix1 * (sat(l[i] * g1) * k1 - l[i]);
+                r[i] += mix1 * (sat(r[i] * g1) * k1 - r[i]);
             }
-        } else {                    /* Drive moved: ramp a across the block, keeping full scale at full scale */
-            float da = (a1 - a0) / (float)n, aa = a0;
-            for (unsigned i = 0; i < n; i++, aa += da) {
-                float k = 1.f / sat(aa);
-                l[i] = sat(l[i] * aa) * k;
-                r[i] = sat(r[i] * aa) * k;
+        } else {                    /* Drive moved: ramp across the block (k follows g, so the level stays put) */
+            float inv = 1.f / (float)n, dg = (g1 - g0) * inv, dm = (mix1 - mix0) * inv, g = g0, mix = mix0;
+            for (unsigned i = 0; i < n; i++) {
+                g += dg; mix += dm;
+                float k = SAT_REF / sat(g * SAT_REF);
+                l[i] += mix * (sat(l[i] * g) * k - l[i]);
+                r[i] += mix * (sat(r[i] * g) * k - r[i]);
             }
         }
     }

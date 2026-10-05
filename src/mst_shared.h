@@ -4,7 +4,7 @@
 
 struct mst_meter {
     uint32_t magic;
-    int16_t over;              /* loudest detector level of the last report, relative to the threshold, in 0.1 dB */
+    int16_t over;              /* unused (0) */
     uint16_t gr;               /* most gain reduction of the last report, 0.1 dB */
     uint8_t on;                /* compressor on */
     uint8_t _p[3];

@@ -109,17 +109,17 @@ def run(evs, amp, blocks=96, fn=None, with_next=True):
 COMP_ON = [(0xB5, 1), (0x135, 0)]
 uc, _ = run(COMP_ON, 1.0)
 magic, over, gr, on, seq = meter(uc)
-print(f"     loud: over {over / 10:.1f} dB, GR {gr / 10:.1f} dB, seq {seq}")
+lg = struct.unpack("<f", uc.mem_read(uc.obj + 0xC0, 4))[0]; mk = struct.unpack("<f", uc.mem_read(uc.obj + 0xFC, 4))[0]
+print(f"     loud: GR {gr / 10:.1f} dB (compressor's own gain now {6.0206 * (lg - mk):.1f} dB), seq {seq}")
 check(magic == 0x524D4F43 and on == 1 and seq == 3, "M7 publishes a report every 32 blocks, compressor on")
-check(over > 0, "0 dBFS sine: level past the threshold")
-check(120 <= gr <= 250, "0 dBFS sine: gain reduction reported")
+check(abs(gr / 10 + 6.0206 * (lg - mk)) < 1.0, "0 dBFS sine: reported GR matches the compressor's gain (~17 dB at 4:1, -20 dB)")
 check(uc.nexts and all(n == (NEXT, CTX, NEXT) for n in uc.nexts) and uc.ret == 7, "next node run once per block, its result returned, obj+8 restored")
 check(len(uc.nexts) == 96, "next node not run twice (stock compressor didn't chain)")
 
 uc, _ = run(COMP_ON, 0.01)
-magic, over, gr, on, seq = meter(uc)
-print(f"     quiet: over {over / 10:.1f} dB, GR {gr / 10:.1f} dB")
-check(over < 0 and gr <= 5, "-40 dBFS sine: below threshold, no gain reduction")
+gr = meter(uc)[2]
+print(f"     quiet: GR {gr / 10:.1f} dB")
+check(gr <= 5, "-40 dBFS sine: no gain reduction")
 
 uc, _ = run([(0xB5, 0)], 1.0)
 check(meter(uc)[3] == 0, "compressor off: reported off")
@@ -128,25 +128,39 @@ uc, _ = run([], 0.5, blocks=2, with_next=False)
 check(uc.ret == 1 and not uc.nexts, "no next node: returns 1 like stock")
 
 # Drive 0 (and never set): bit-identical to the stock compressor
-for evs in ([(0xB5, 0)], COMP_ON):
+OFF = [(0xB5, 0)]
+for evs in (OFF, COMP_ON):
     _, a = run(evs, 0.7, blocks=8)
     _, b = run(evs, 0.7, blocks=8, fn=0x08042A90)
     check(a == b, f"Drive 0, comp {'on' if evs == COMP_ON else 'off'}: output identical to stock")
 
-# Drive 1000: full scale stays in bounds, quiet gets louder, the change ramps
-_, plain = run([(0xB5, 0)], 0.1, blocks=4)
-_, hot = run([(0xB5, 0), (0x43, 1000)], 0.1, blocks=4)
-pk_plain = max(abs(x) for x in plain[-1][0]); pk_hot = max(abs(x) for x in hot[-1][0])
-print(f"     -20 dBFS sine: {20 * math.log10(pk_plain):.1f} dB -> {20 * math.log10(pk_hot):.1f} dB at full Drive")
-check(pk_hot > pk_plain * 4, "full Drive: quiet signal much louder")
-_, full = run([(0xB5, 0), (0x43, 1000)], 1.0, blocks=4)
-check(max(abs(x) for blk in full for ch in blk for x in ch) <= 1.0 + 1e-6, "full Drive, 0 dBFS in: peaks stay within full scale")
-_, half = run([(0xB5, 0), (0x43, 500)], 0.1, blocks=4)
-pk_half = max(abs(x) for x in half[-1][0])
-check(pk_plain < pk_half < pk_hot, "half Drive sits between")
-first = hot[0][0]; steady = hot[-1][0]                     # first block ramps from a = 0
-ratios = [abs(first[i] / plain[0][0][i]) for i in range(4, N) if abs(plain[0][0][i]) > 0.02]
-check(ratios[0] < ratios[-1] and ratios[0] < 2, f"Drive change ramps across the block (gain {ratios[0]:.2f} -> {ratios[-1]:.2f})")
+# Saturate: overdrive with the level held around -14 dBFS peaks
+def peak(out): return max(abs(x) for x in out[-1][0])
+def rms_db(out): v = out[-1][0]; return 10 * math.log10(sum(x * x for x in v) / len(v))
+lv = {}
+for amp in (1.0, 0.2, 0.05):
+    row = []
+    for drv in (0, 250, 500, 1000):
+        _, o = run(OFF + ([(0x43, drv)] if drv else []), amp, blocks=4)
+        row.append((peak(o), rms_db(o)))
+    lv[amp] = row
+    print(f"     {20 * math.log10(amp):5.1f} dBFS sine, Drive 0/250/500/1000: peak " +
+          " ".join(f"{20 * math.log10(p):6.1f}" for p, _ in row) + " dB, rms " + " ".join(f"{r:6.1f}" for _, r in row))
+check(abs(20 * math.log10(lv[0.2][3][0]) + 14) < 0.5, "full Drive: output peaks sit at -14 dBFS")
+check(lv[1.0][3][1] < lv[1.0][0][1] - 6, "full Drive, 0 dBFS in: quieter, not louder")
+check(lv[1.0][1][1] < lv[1.0][0][1] + 0.5 and lv[0.2][1][1] < lv[0.2][0][1] + 3, "quarter Drive: no big level jump")
+check(lv[0.05][3][1] - lv[0.05][0][1] < 18, "full Drive, -26 dBFS in: lifted, but less than the 36 dB of drive")
+_, o = run(OFF + [(0x43, 1000)], 1.0, blocks=8)
+check(max(abs(x) for blk in o for ch in blk for x in ch) <= 1.0, "turning Drive up never overshoots")
+# small Drive fades in: Drive 10 changes little
+_, plain = run(OFF, 0.7, blocks=4)
+_, tiny = run(OFF + [(0x43, 10)], 0.7, blocks=4)
+dev = max(abs(a - b) for a, b in zip(plain[-1][0], tiny[-1][0]))
+check(dev < 0.05, f"Drive 1 %: barely changes the sound (max difference {dev:.3f}), no jump leaving 0")
+# a ramp: first block after the change moves from dry towards wet
+_, hot = run(OFF + [(0x43, 1000)], 0.7, blocks=2)
+d0 = abs(hot[0][0][1] - plain[0][0][1]); d1 = abs(hot[0][0][-1] - plain[0][0][-1])
+check(d0 < 0.05, f"Drive change ramps in across the block (first sample off by {d0:.3f})")
 
 # cost per block, on top of the stock compressor
 def cost(evs, fn):
@@ -159,10 +173,12 @@ def cost(evs, fn):
     return n[0]
 base = cost(COMP_ON, 0x08042A90); m0 = cost(COMP_ON, s7["mst_process"]); m1 = cost(COMP_ON + [(0x43, 700)], s7["mst_process"])
 print(f"     instructions/block: stock {base}, + meter {m0 - base}, + saturator {m1 - base}")
+check(m0 - base < 250, "meter alone: under 250 instructions per block")
 check(m1 - base < 3000, "saturator + meter under ~3000 instructions per 32-sample block (~0.6 % of the M7)")
 
-# ---- M4: the compressor meter on the settings page
-def m4(page_on, mst, fmt=4, bpp=2):
+# ---- M4: the CPU bar as before, the gain-reduction bar in the settings list's Thresh row
+LIST_Y, LIST_H = 0, 180
+def m4(page_on, mst, k_thr=27, scroll=700, hidden=False, fmt=4, bpp=2):
     uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
     uc.mem_map(0x08000000, 0x200000); uc.mem_write(0x08040000, data[:0xA0000]); uc.mem_write(0x08100000, data[0xC0000:])
     for base, size in [(0x24000000, 0x80000), (0x30000000, 0x48000), (0x38800000, 0x1000), (0x58024000, 0x1000),
@@ -173,8 +189,17 @@ def m4(page_on, mst, fmt=4, bpp=2):
     page = APP + 0x1E9E8 if page_on else APP + 0x1000
     uc.mem_write(APP + 0x2B4, struct.pack("<I", page))
     uc.mem_write(APP + 0x1E9E8 + 0xA3E0, struct.pack("<H", 0xC))
+    lst = APP + 0x1E9E8 + 0x9C8
+    uc.mem_write(lst + 4, struct.pack("<iiii", 0, LIST_Y, 320, LIST_H))
+    uc.mem_write(lst + 0x99E8, struct.pack("<I", 38))
+    for k in range(38):                                    # as FUN_081400e2 lays them out
+        row = lst + 0xE8 + k * 0x330
+        y = scroll + LIST_H - 30 * (k + 1)
+        uc.mem_write(row + 4, struct.pack("<iiii", 0, y + LIST_Y, 320, 28))
+        uc.mem_write(row + 0x30, bytes([1 if hidden or y > LIST_H or y + 28 < 0 else 0]))
+        uc.mem_write(row + 0x32C, struct.pack("<H", 0x132 if k == k_thr else 0x100 + k))
     uc.mem_write(0x38800F00, struct.pack("<IHHI", 0x43505542, 500, 800, 1))
-    if mst: uc.mem_write(0x38800F40, struct.pack("<IhHBxxxI", 0x524D4F43, mst[0], 0, mst[1], 1))
+    if mst: uc.mem_write(0x38800F40, struct.pack("<IhHBxxxI", 0x524D4F43, 0, mst[0], mst[1], 1))
     DESC, FB, DISP = 0x24030000, 0xC0000000, 0x24040000
     uc.mem_write(DESC, struct.pack("<IHHBBH", FB, 320, 240, fmt, 0, bpp))
     def stub(addr, fn):
@@ -183,20 +208,31 @@ def m4(page_on, mst, fmt=4, bpp=2):
     stub(0x081013D2, lambda uc: uc.reg_write(UC_ARM_REG_R0, DESC)); stub(0x08101384, lambda uc: None)
     for r, v in zip((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3), (DISP, 1, 0, 0)): uc.reg_write(r, v)
     uc.reg_write(UC_ARM_REG_SP, 0x2407F000); uc.reg_write(UC_ARM_REG_LR, RET | 1)
-    uc.emu_start(s4["cpu_present"] | 1, RET, count=200000)
-    return [struct.unpack("<H", uc.mem_read(FB + (r * 320 + 315) * 2, 2))[0] for r in range(3, 17)]
+    uc.emu_start(s4["cpu_present"] | 1, RET, count=2000000)
+    fb = bytes(uc.mem_read(FB, 320 * 240 * 2))
+    px = lambda x, r: struct.unpack_from("<H", fb, (r * 320 + x) * 2)[0]
+    cpu = [px(315, r) for r in range(3, 17)]
+    rest = [(x, r) for r in range(20, 240) for x in range(0, 320, 4) if px(x, r)]
+    return cpu, rest, px
 
-G, R, W, K = 0x064A, 0xF945, 0xFFFF, 0x3186
-def show(c): return " ".join({G: "g", R: "R", W: "W", K: "."}.get(x, f"{x:x}") for x in c)
-cpu = m4(False, (60, 1)); print("     not settings:", show(cpu))
-check(cpu[-7:] == [G] * 7 and cpu[3] == W, "other pages: CPU bar as before")
-c = m4(True, (-150, 1)); print("     -15 dB:", show(c))
-c_r = c[::-1]                                              # bottom first
-check(c_r[:5] == [G] * 5 and c_r[10] == W and c_r[5:10] == [K] * 5, "settings, 15 dB under: green, white threshold mark")
-c = m4(True, (60, 1)); print("     +6 dB:", show(c)); c_r = c[::-1]
-check(c_r[:10] == [G] * 10 and c_r[10:12] == [R] * 2 and c_r[12:] == [K] * 2, "settings, 6 dB over: red past the threshold")
-c = m4(True, (60, 0))
-check(c == cpu, "settings, compressor off: CPU bar")
-c = m4(True, None)
-check(c == cpu, "settings, no M7 report yet: CPU bar")
+G, W, K = 0x064A, 0xFFFF, 0x3186
+BLUE, TICK, TRACK = 0x2CBF, 0x5332, 0x1108
+cpu0, rest, _ = m4(False, (100, 1))
+check(cpu0[-7:] == [G] * 7 and cpu0[3] == W and not rest, "other pages: CPU bar as before, nothing else drawn")
+cpu, rest, px = m4(True, (100, 1))                         # Thresh row: y = 700 + 180 - 840 = 40 -> screen rows 172..199
+y = 40
+rows = sorted({r for _, r in rest})
+print(f"     settings, 10 dB GR: drawn on screen rows {rows}, row 199: {px(0, 199):04x} {px(159, 199):04x} {px(160, 199):04x} {px(161, 199):04x} {px(319, 199):04x}")
+check(cpu == cpu0, "settings page: CPU bar unchanged")
+check(rows == [237 - y, 238 - y, 239 - y], "bar on the Thresh row's bottom 3 px, under its label")
+check(all(px(x, 239 - y) == BLUE for x in range(0, 160)) and px(160, 239 - y) == TICK and px(161, 239 - y) == TRACK and px(319, 239 - y) == TRACK,
+      "10 dB of GR fills half the row in blue, then the 10 dB tick and the dark track")
+_, rest, px = m4(True, (0, 1))
+check({px(x, 199) for x in range(320)} == {TRACK, TICK} and [x for x in range(320) if px(x, 199) == TICK] == [80, 160, 240], "no GR: dark track, ticks at 5/10/15 dB")
+_, rest, px = m4(True, (400, 1))
+check(all(px(x, 199) == BLUE for x in range(320)), "20 dB or more: full row")
+check(not m4(True, (100, 1), scroll=0)[1], "Thresh row scrolled out of view: nothing drawn")
+check(not m4(True, (100, 1), scroll=660 + 155)[1], "Thresh row half off the top of the list: nothing drawn")
+check(not m4(True, (100, 0))[1], "compressor off: nothing drawn")
+check(not m4(True, None)[1], "no M7 report yet: nothing drawn")
 print("all passed")
