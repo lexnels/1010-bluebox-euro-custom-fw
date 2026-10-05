@@ -1,5 +1,5 @@
 /*
- * Lush hall: an 8-line modulated feedback delay network (FDN) with input diffusion and early reflections.
+ * FDN Hall: an 8-line modulated feedback delay network (FDN) with input diffusion and early reflections.
  * Pure DSP, no firmware addresses: builds for the M7 cave and for the host test (tests/hall_host.c).
  *
  *   in L/R -> low cut, high cut -> pre-delay -+-> early reflections (taps on the pre-delay line) ---------------+

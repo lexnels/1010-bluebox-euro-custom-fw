@@ -2,7 +2,7 @@
  * Extra reverb styles, M7 side: styles 15.. run our own engines instead of the stock reverb engine.
  * bluebox eurorack firmware (BLUEEURO 3).
  *
- *   15 Lush Hall  src/hall_dsp.h      (8-line modulated FDN, this project, MIT)
+ *   15 FDN Hall   src/hall_dsp.h      (8-line modulated FDN, this project, MIT)
  *   16 MVerb      src/rev_mverb.h     (Martin Eastwood, GPL-3: see that file)
  *   17 Squall     src/rev_squall.h    (Clouds reverb, Emilie Gillet, MIT; Squall voicing)
  *   18 Freeverb   src/rev_freeverb.h  (Jezar, public domain)
@@ -16,7 +16,9 @@
  *
  * Two hooks:
  *   hall_set     replaces that setter call (bl @0x08048e56). Remembers every reverb knob, and swallows styles 15+ so
- *                the stock engine never indexes past its 15 presets.
+ *                the stock engine never indexes past its 15 presets. Each style keeps its own panel knob settings:
+ *                leaving a style saves them, coming back restores them (hall_echo then moves the panel's knobs).
+ *   hall_echo    replaces the style-change echo (bl @0x08048e6e) and sends every panel knob back to the UI.
  *   hall_process replaces vtable slot 3. Runs the stock engine unless one of our styles is selected; then drains the
  *                events itself and runs that engine in the stock engine's (now idle) delay memory.
  * The engines share that memory, so it is zeroed whenever it changes hands: the stock engine then
@@ -58,6 +60,11 @@ enum { ENG_NONE, ENG_HALL, ENG_MVERB, ENG_SQUALL, ENG_FREEVERB, ENG_COUNT };
 #define P_FIRST 0x13d
 #define P_COUNT 32               /* reverb params 0x13d..0x15c */
 #define P_UNSET (-0x7fffffff)
+#define N_STYLES (LAST_STYLE + 1)
+/* the panel's knobs (patches/hall.py PANEL_IDS, Freeze aside): what each style remembers and the echo sends back */
+static const uint16_t knob_id[] = { 0x159, 0x15a, 0x13e, 0x146, 0x143, 0x13d, 0x14a, 0x148 };
+#define N_KNOBS 8
+#define P_SIZE 0x143             /* Size: our styles only; never reaches the stock engine (its styles size by 0x142) */
 
 struct fw_ev {
     uint8_t type, _p0[11];
@@ -75,14 +82,18 @@ struct hall_slot {
     uint8_t _p;
     uint32_t clear_pos;          /* floats zeroed so far */
     int32_t raw[P_COUNT];
+    int8_t style;                /* selected style, -1 = none yet */
+    uint8_t kept[N_STYLES];      /* keep[style] holds that style's knobs */
+    int32_t keep[N_STYLES][N_KNOBS];
 };
 #define HALL_SLOTS 4
 struct hall_shared {
     uint32_t magic;
     struct hall_slot slot[HALL_SLOTS];
 };
-#define HS ((volatile struct hall_shared *)0x38800000u)   /* 0x38800000..0x38800233; the CPU meter uses 0xf00.. */
-#define HS_MAGIC 0x4c534856u
+#define HS ((volatile struct hall_shared *)0x38800000u)   /* 0x38800000..; the CPU meter uses 0xf00.. */
+#define HS_MAGIC 0x4c534857u
+_Static_assert(sizeof(struct hall_shared) <= 0xf00, "backup SRAM below the CPU meter");
 
 static struct hall_slot *slot_for(uint8_t *obj)
 {
@@ -95,6 +106,9 @@ static struct hall_slot *slot_for(uint8_t *obj)
             hs->slot[s].active = hs->slot[s].owner = hs->slot[s].clearing = 0;
             for (int i = 0; i < P_COUNT; i++)
                 hs->slot[s].raw[i] = P_UNSET;
+            hs->slot[s].style = -1;
+            for (int i = 0; i < N_STYLES; i++)
+                hs->slot[s].kept[i] = 0;
         }
         hs->magic = HS_MAGIC;
     }
@@ -121,11 +135,12 @@ static float sample_rate(const uint8_t *obj)
     return (sr >= 8000u && sr <= 192000u) ? (float)sr : 48000.f;
 }
 
-/* Panel values for our styles. Time and Level follow the stock meaning (0..2000, 1000 = default); Diffusion and Spread
- * are read back from the stock object, where the stock setter keeps them (diffamt x 0.001 at +0x78, spread x 0.1 at
- * +0xa0, checked by running the setter under Unicorn), so they always match what the panel shows, whether a stock
- * style set them or the knob did. The panel doesn't show the other params (patches/panel.py), so they keep whatever a
- * stock preset left in them; our styles use fixed values for those. */
+/* Panel values for our styles. Time and Level follow the stock meaning (0..2000, 1000 = default); Diffusion, Spread and
+ * Pre Delay are read back from the stock object, where the stock setter keeps them (diffamt x 0.001 at +0x78, spread
+ * x 0.1 at +0xa0, predelay x 0.0001 at +0x70, checked by running the setter under Unicorn), so they always match what
+ * the panel shows, whether a stock style set them or the knob did. Size (0..1000, 500 = each engine's own tuning) is
+ * ours alone. The panel doesn't show the other params, so they keep whatever a stock preset left in them; our styles
+ * use fixed values for those. */
 static float obj_f(const uint8_t *obj, unsigned ofs, float lo, float hi, float def)
 {
     float v = *(const float *)(obj + ofs);
@@ -136,18 +151,21 @@ static void rev_knobs_from(const struct hall_slot *sl, struct rev_knobs *k)
 {
     k->time       = raw(sl, 0x159, 1000.f) * 1e-3f;
     k->level      = raw(sl, 0x15a, 1000.f) * 1e-3f;
-    k->predelay_s = raw(sl, 0x13d, 200.f) * 1e-4f;      /* 0..9990, 0.1 ms */
+    k->predelay_s = obj_f(sl->obj, 0x70, 0.f, 1.f, 0.02f);   /* 0..9990 x 0.1 ms */
     k->hicut      = raw(sl, 0x148, 1000.f) * 1e-3f;
     k->lowcut     = raw(sl, 0x14a, 0.f) * 1e-3f;
     k->freeze     = raw(sl, 0x14f, 0.f) >= 1.f;
     k->spread     = obj_f(sl->obj, 0xa0, -100.f, 100.f, 0.f) * 1e-2f;   /* -1..1 */
     k->diffusion  = obj_f(sl->obj, 0x78, 0.f, 1.f, 0.8f);
-    k->size       = 0.8f;
+    k->size       = rv_clamp(raw(sl, P_SIZE, 500.f) * 1e-3f, 0.f, 1.f);
     k->feedback   = 0.5f;
     k->mod_rate   = 0.4f;
     k->mod_depth  = 0.5f;
     k->er_level   = 0.5f;                              /* MVerb: 3/4 tank, 1/4 early reflections */
 }
+
+/* Size knob 0..1 -> an engine size 0..1 that is 0.8 (where FDN Hall and MVerb were tuned) at the knob's middle */
+static float size_tuned(float s) { return s <= 0.5f ? 1.6f * s : 0.8f + 0.4f * (s - 0.5f); }
 
 static void hall_knobs_from(const struct hall_slot *sl, struct hall_knobs *k)
 {
@@ -159,7 +177,7 @@ static void hall_knobs_from(const struct hall_slot *sl, struct hall_knobs *k)
     k->hicut      = r.hicut;
     k->lowcut     = r.lowcut;
     k->freeze     = r.freeze;
-    k->size       = r.size;
+    k->size       = size_tuned(r.size);
     k->diffusion  = r.diffusion;
     k->density    = r.feedback;                          /* "Feedback": diffusion inside the tail */
     k->spread     = r.spread;
@@ -171,7 +189,7 @@ static void hall_knobs_from(const struct hall_slot *sl, struct hall_knobs *k)
 }
 
 #define MEM_FLOATS 0x40000u        /* the stock engine's delay memory, all of it */
-_Static_assert(HALL_MEM_FLOATS <= MEM_FLOATS, "Lush Hall memory");
+_Static_assert(HALL_MEM_FLOATS <= MEM_FLOATS, "FDN Hall memory");
 _Static_assert(sizeof(struct fv_state) <= FV_STATE_FLOATS * 4 && sizeof(struct sq_state) <= SQ_STATE_FLOATS * 4 &&
                sizeof(struct mv_state) <= MV_STATE_FLOATS * 4 && sizeof(struct rev_wrap) <= RW_HEAD_FLOATS * 4,
                "engine state headers");
@@ -180,6 +198,51 @@ _Static_assert(RW_ENGINE_OFS + SQ_MEM_FLOATS <= MEM_FLOATS, "Squall memory");
 _Static_assert(RW_ENGINE_OFS + MV_STATE_FLOATS + 79168u <= MEM_FLOATS, "MVerb memory");   /* mv_mem_floats() */
 #define CLEAR_SLICE 8192u          /* floats zeroed per block while it changes hands */
 
+static int obj_knob(const uint8_t *obj, unsigned ofs, float lo, float hi, float scale, int32_t *v)
+{
+    float f = *(const float *)(obj + ofs);
+    if (!(f >= lo && f <= hi))
+        return 0;
+    f *= scale;
+    *v = (int32_t)(f + (f >= 0.f ? 0.5f : -0.5f));
+    return 1;
+}
+
+/* A panel knob's current value in the panel's units; 0 if not known yet. */
+static int knob_value(const struct hall_slot *sl, unsigned id, int32_t *v)
+{
+    if (id == 0x13e) return obj_knob(sl->obj, 0x78, 0.f, 1.f, 1000.f, v);
+    if (id == 0x146) return obj_knob(sl->obj, 0xa0, -100.f, 100.f, 10.f, v);
+    if (id == 0x13d) return obj_knob(sl->obj, 0x70, 0.f, 1.f, 10000.f, v);
+    *v = sl->raw[id - P_FIRST];
+    return *v != P_UNSET;
+}
+
+static void save_knobs(struct hall_slot *sl, int style)
+{
+    for (int i = 0; i < N_KNOBS; i++)
+        if (!knob_value(sl, knob_id[i], &sl->keep[style][i]))
+            sl->keep[style][i] = P_UNSET;
+    sl->kept[style] = 1;
+}
+
+/* After the style itself is applied: that style's saved knobs, or Time and Level back at 1000 like the stock UI does. */
+static void restore_knobs(struct hall_slot *sl, uint8_t *obj, int style)
+{
+    for (int i = 0; i < N_KNOBS; i++) {
+        unsigned id = knob_id[i];
+        int32_t v = sl->kept[style] ? sl->keep[style][i] : P_UNSET;
+        if (v == P_UNSET) {
+            if (id != 0x159 && id != 0x15a)
+                continue;
+            v = 1000;
+        }
+        sl->raw[id - P_FIRST] = v;
+        if (id != P_SIZE)
+            fw_set((float)v, obj, id);
+    }
+}
+
 /* Replaces bl FUN_080451ec @0x08048e56 (s0 = value, r0 = obj, r1 = id); hall_process calls it too. */
 void hall_set(float value, uint8_t *obj, unsigned id)
 {
@@ -187,14 +250,24 @@ void hall_set(float value, uint8_t *obj, unsigned id)
     if (id == 0x155 && (style < 0 || style > LAST_STYLE))
         return;                               /* not a style: ignore, as the stock engine would index past its presets */
     struct hall_slot *sl = slot_for(obj);
-    if (sl) {
-        if (id >= P_FIRST && id < P_FIRST + P_COUNT)
-            sl->raw[id - P_FIRST] = (int32_t)value;
-        if (id == 0x155)
-            sl->active = style >= FIRST_STYLE ? (uint8_t)(ENG_HALL + style - FIRST_STYLE) : ENG_NONE;
+    if (sl && id == 0x155) {
+        int prev = sl->style;
+        if (prev != style && prev >= 0 && prev < N_STYLES)
+            save_knobs(sl, prev);             /* before the new style's presets overwrite them */
+        sl->style = (int8_t)style;
+        sl->active = style >= FIRST_STYLE ? (uint8_t)(ENG_HALL + style - FIRST_STYLE) : ENG_NONE;
+        if (style < FIRST_STYLE)
+            fw_set(value, obj, id);           /* styles 15+ never reach it: it has 15 presets */
+        if (prev != style)
+            restore_knobs(sl, obj, style);
+        return;
     }
+    if (sl && id >= P_FIRST && id < P_FIRST + P_COUNT)
+        sl->raw[id - P_FIRST] = (int32_t)value;
     if (id == 0x155 && style >= FIRST_STYLE)
-        return;                               /* the stock engine keeps its previous style */
+        return;                               /* no slot: still keep styles 15+ from the stock engine */
+    if (id == P_SIZE)
+        return;
     fw_set(value, obj, id);
 }
 
@@ -205,12 +278,22 @@ static void echo_one(uint8_t *obj, void *ctx, unsigned id, float v)
 }
 
 /* Replaces bl FUN_0804467c @0x08048e6e: after a style change the M7 tells the M4 the values the style set, so the
- * panel shows them. Stock sends Low Cut, HI C and Pre Delay; this adds Diffusion and Spread. */
+ * panel shows them. Stock sends Low Cut, HI C and Pre Delay (the last in ms, a tenth of the panel's unit); this then
+ * sends every panel knob, in the panel's units, so the knobs show what the style (or its saved settings) set. */
 void hall_echo(uint8_t *obj, void *ctx)
 {
     fw_echo(obj, ctx);
-    echo_one(obj, ctx, 0x13e, *(float *)(obj + 0x78) * 1000.f);
-    echo_one(obj, ctx, 0x146, *(float *)(obj + 0xa0) * 10.f);
+    struct hall_slot *sl = slot_for(obj);
+    if (!sl) {
+        echo_one(obj, ctx, 0x13e, *(float *)(obj + 0x78) * 1000.f);
+        echo_one(obj, ctx, 0x146, *(float *)(obj + 0xa0) * 10.f);
+        return;
+    }
+    for (int i = 0; i < N_KNOBS; i++) {
+        int32_t v;
+        if (knob_value(sl, knob_id[i], &v))
+            echo_one(obj, ctx, knob_id[i], (float)v);
+    }
 }
 
 static unsigned chain(uint8_t *obj, void *ctx)
@@ -277,6 +360,7 @@ static void engine_run(int eng, const struct hall_slot *sl, float *mem, float *l
     if (eng == ENG_MVERB) {
         float pre = k.predelay_s;
         k.predelay_s = 0.f;                   /* MVerb pre-delays the tank only, inside the engine */
+        k.size = size_tuned(k.size);
         rw_pre(rw, mem, &k, l, r, n);
         k.predelay_s = pre;
         mv_process(em, &k, l, r, n);

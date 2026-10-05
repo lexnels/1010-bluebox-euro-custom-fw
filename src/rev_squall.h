@@ -10,13 +10,15 @@
  *   HI C      tone (loop low-pass, Squall's 0.6 .. 0.97)
  *   Diffusion allpass coefficient 0.5 .. 0.74 (Squall's range)
  *   Spread    stereo width (wrapper)
+ *   Size      loop delays x0.5 .. x2 (x1 = Clouds' tuning at the middle), gliding
  *   Freeze    loop gain 1, low-pass open, input muted
  */
 #ifndef REV_SQUALL_H
 #define REV_SQUALL_H
 #include "rev_common.h"
 
-#define SQ_SIZE 16384u
+#define SQ_SIZE 32768u           /* room for the loop lines at Size x2 */
+#define SQ_FIRST_LOOP 4          /* lines 4.. scale with Size */
 static const uint16_t sq_len[10] = { 113, 162, 241, 399, 1653, 2038, 3411, 1913, 1663, 4782 };
 enum { SQ_AP1, SQ_AP2, SQ_AP3, SQ_AP4, SQ_DAP1A, SQ_DAP1B, SQ_DEL1, SQ_DAP2A, SQ_DAP2B, SQ_DEL2 };
 
@@ -26,6 +28,7 @@ struct sq_state {
     float lp1, lp2;
     float lfo_ph[2], lfo_val[2];
     uint32_t count;
+    float scale_s;               /* smoothed Size scale, < 0 = not set yet */
 };
 #define SQ_STATE_FLOATS 64u
 #define SQ_MEM_FLOATS (SQ_STATE_FLOATS + SQ_SIZE)
@@ -35,7 +38,8 @@ static void sq_init(float *m, float fs)
     (void)fs;
     struct sq_state *st = (struct sq_state *)m;
     uint32_t b = 0;
-    for (int i = 0; i < 10; i++) { st->base[i] = b; b += sq_len[i] + 1u; }
+    for (int i = 0; i < 10; i++) { st->base[i] = b; b += sq_len[i] * (i >= SQ_FIRST_LOOP ? 2u : 1u) + 1u; }
+    st->scale_s = -1.f;
     st->wp = 0;
     st->lp1 = st->lp2 = 0.f;
     st->lfo_ph[0] = st->lfo_ph[1] = 0.f;
@@ -53,13 +57,20 @@ static void sq_process(float *m, const struct rev_knobs *k, float *L, float *R, 
     float klp = 0.6f + 0.37f * rv_clamp(k->hicut, 0.f, 1.f);
     float kap = 0.5f + 0.24f * rv_clamp(k->diffusion, 0.f, 1.f);
     float gain = 0.2f;
+    float scale_t = rv_exp2(2.f * (rv_clamp(k->size, 0.f, 1.f) - 0.5f));
+    if (st->scale_s < 0.f) st->scale_s = scale_t;
+    st->scale_s += (scale_t - st->scale_s) * 0.02f;       /* glide: Size bends pitch, never clicks */
+    const float sc = st->scale_s;
+    uint32_t len[10];
+    for (int i = 0; i < 10; i++)
+        len[i] = i >= SQ_FIRST_LOOP ? (uint32_t)((float)sq_len[i] * sc) : sq_len[i];
     if (k->freeze) { krt = 1.f; klp = 1.f; gain = 0.f; }
     /* LFOs: Clouds' 0.5 Hz and 0.3 Hz at its 32 kHz rate; refreshed every 32 samples like FxEngine */
     const float inc[2] = { 0.5f / 32000.f * 32.f, 0.3f / 32000.f * 32.f };
     float lp1 = st->lp1, lp2 = st->lp2;
     int32_t wp = st->wp;
 #define AT(line, ofs) buf[(uint32_t)(wp + (int32_t)st->base[line] + (int32_t)(ofs)) & MASK]
-#define TAIL(line) AT(line, sq_len[line] - 1)
+#define TAIL(line) AT(line, len[line] - 1)
     for (unsigned s = 0; s < n; s++) {
         if (--wp < 0) wp += SQ_SIZE;
         if ((st->count++ & 31u) == 0) {
@@ -91,7 +102,7 @@ static void sq_process(float *m, const struct rev_knobs *k, float *L, float *R, 
 
         /* left loop */
         {
-            float o = 4680.f + 100.f * st->lfo_val[1];
+            float o = (4680.f + 100.f * st->lfo_val[1]) * sc;
             int32_t oi = (int32_t)o;
             float fr = o - (float)oi, a = AT(SQ_DEL2, oi), b = AT(SQ_DEL2, oi + 1);
             acc = apout + (a + (b - a) * fr) * krt;

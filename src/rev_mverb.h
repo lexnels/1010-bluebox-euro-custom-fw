@@ -35,6 +35,8 @@ struct mv_svf { float f, low, band; };
 struct mv_state {
     float fs, size, prev_l, prev_r;
     float decay_s, bw_s, damp_s, pre_s;
+    float size_pend;             /* Size waiting to settle before the re-layout (which clears the tank) */
+    uint32_t pend_n, fresh;
     struct mv_line ln[MV_LINES];
     struct mv_svf bw[2], dmp[2];
 };
@@ -100,6 +102,9 @@ static void mv_init(float *m, float fs)
     st->decay_s = st->bw_s = st->damp_s = st->pre_s = -1.f;
     for (int c = 0; c < 2; c++) { st->bw[c].low = st->bw[c].band = 0.f; st->dmp[c].low = st->dmp[c].band = 0.f; }
     mv_set_size(st, m, 0.8f);
+    st->size_pend = 0.8f;
+    st->pend_n = 0;
+    st->fresh = 1;
 }
 
 static inline float mv_svf_run(struct mv_svf *f, float in)   /* 4x oversampled SVF low-pass, q = 2 (MVerb's) */
@@ -146,7 +151,14 @@ static void mv_process(float *m, const struct rev_knobs *k, float *L, float *R, 
     struct mv_state *st = (struct mv_state *)m;
     const float fs = st->fs;
     float size = 0.95f * rv_clamp(k->size, 0.f, 1.f) + 0.05f;
-    if (size > st->size + 0.02f || size < st->size - 0.02f) mv_set_size(st, m, size);   /* MVerb clears on Size too */
+    /* MVerb re-lays out and clears the tank on a Size change; wait until the knob rests (0.15 s) so turning it
+     * costs one dropout, not one per block */
+    if (size > st->size + 0.02f || size < st->size - 0.02f) {
+        if (st->fresh) mv_set_size(st, m, size);
+        else if (size > st->size_pend + 0.005f || size < st->size_pend - 0.005f) { st->size_pend = size; st->pend_n = 0; }
+        else if ((st->pend_n += n) >= (uint32_t)(0.15f * fs)) mv_set_size(st, m, size);
+    }
+    st->fresh = 0;
     float decay_t = 0.7995f * rv_clamp(k->time * 0.5f, 0.f, 1.f) + 0.005f;
     float damp_t = rv_clamp(k->hicut, 0.f, 1.f) * 18400.f + 100.f;
     float bw_t = (0.5f + 0.5f * rv_clamp(k->hicut, 0.f, 1.f)) * 18400.f + 100.f;

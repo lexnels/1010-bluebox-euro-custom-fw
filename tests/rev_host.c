@@ -108,6 +108,32 @@ int main(int argc, char **argv)
             prev = r;
         }
         CHECK(mono, "%s: decay grows with Time", g->name);
+        prev = 0.f; mono = 1;
+        for (int z = 0; z <= 2; z++) {
+            struct rev_knobs k = defaults(); k.size = 0.5f * z;
+            run(g, &k, L, R, 48000 * 12, 1, 0);
+            float r = rt60(L, R, 48000 * 12);
+            printf("      Size %.1f: RT60 %.2f s\n", 0.5f * z, r);
+            if (r <= prev) mono = 0;
+            prev = r;
+        }
+        CHECK(mono, "%s: decay grows with Size", g->name);
+        {
+            /* noise in while Size sweeps 0 -> 1 -> 0 over 4 s: no blow-up, no NaN */
+            struct rev_knobs k = defaults();
+            struct rev_wrap *rw = (struct rev_wrap *)mem;
+            for (uint32_t i = 0; i < RW_ENGINE_OFS + g->mem; i++) mem[i] = 0.f;
+            rw_init(rw, 1, FS); rw->fade = 1.f; g->init(mem + RW_ENGINE_OFS, FS);
+            float mx = 0; int finite = 1; srand(7);
+            for (int s = 0; s < 48000 * 4; s += BLK) {
+                float bl[BLK], br[BLK], ph = s / (48000.f * 2.f);
+                for (int i = 0; i < BLK; i++) bl[i] = br[i] = rand() / (float)RAND_MAX - 0.5f;
+                k.size = ph < 1.f ? ph : 2.f - ph;
+                rw_pre(rw, mem, &k, bl, br, BLK); g->proc(mem + RW_ENGINE_OFS, &k, bl, br, BLK); rw_post(rw, &k, bl, br, BLK);
+                for (int i = 0; i < BLK; i++) { if (!isfinite(bl[i]) || !isfinite(br[i])) finite = 0; mx = fmaxf(mx, fabsf(bl[i])); }
+            }
+            CHECK(finite && mx < 8.f, "%s: Size sweep is stable (peak %.2f)", g->name, mx);
+        }
         struct rev_knobs k = defaults();
         run(g, &k, L, R, 48000 * 6, 1, 0);
         double eL = 0, eR = 0, c = 0; float pk = 0;

@@ -1,8 +1,8 @@
-"""Extra reverb styles after the stock 15: Lush Hall, MVerb, Squall, Freeverb (src/hall_m7.c and the engines it includes)."""
+"""Extra reverb styles after the stock 15: FDN Hall, MVerb, Squall, Freeverb (src/hall_m7.c and the engines it includes)."""
 import os, struct
 from thumb import ROOT, bl, symbols, cave
 
-NAMES = [b"Lush Hall", b"MVerb", b"Squall", b"Freeverb"]   # order = style 15, 16, 17, 18
+NAMES = [b"FDN Hall", b"MVerb", b"Squall", b"Freeverb"]   # order = style 15, 16, 17, 18
 s7 = symbols(os.path.join(ROOT, "out", "hall7.elf"))
 code = cave("hall7")
 
@@ -31,15 +31,18 @@ m7_list, m4_list = style_list(M7_LIST, M7_NAMES), style_list(M4_LIST, M4_NAMES)
 # M4: the reverb slot's param list (FUN_0812060c, case 5 @0x08120c1c). That list decides which knobs the FX2 panel
 # shows (in list order, Style skipped), what projects and presets save, and what is re-sent to the M7 on a full sync.
 # Stock adds 7 ids with straight-line calls; this replaces them with a loop over a table that adds Diffusion and Spread.
-# The panel reaches 8 knobs with the encoders (2 pages of 4), so this fills it. Style must stay first: on a sync it is
-# applied before the values it would otherwise overwrite.
+# The panel lays its widgets out in 5 columns of 2, in list order; the encoders work on 4 at a time (2 columns), in
+# pages that stock stops at 2 for this panel. With Size the knobs fill 4 columns, Freeze sits alone in the fifth, and
+# a third encoder page reaches it. Style must stay first: on a sync it is applied before the values it would otherwise
+# overwrite.
 PANEL_AT = 0x08120C1C
 PANEL_STOCK = bytes.fromhex(
     "002240f255112046fff7ddfc4ff47a7240f259112046fff7d6fc4ff47a724ff4ad712046fff7cffc4ff47a724ff4a4712046fff7c8fc"
     "00224ff4a5712046fff7c2fc40f2db1240f23d112046fff7bbfc002240f24f112046fff7b5fc08e6")
 PANEL_IDS = [(0x155, 0),                                        # Style (not a knob)
              (0x159, 1000), (0x15A, 1000), (0x13E, 800), (0x146, 0),  # page 1: Time, Level, Diffusion, Spread
-             (0x13D, 0x1DB), (0x14A, 0), (0x148, 1000), (0x14F, 0)]   # page 2: Pre Delay, Low Cut, HI C, Freeze
+             (0x143, 500), (0x13D, 0x1DB), (0x14A, 0), (0x148, 1000), # page 2: Size, Pre Delay, Low Cut, HI C
+             (0x14F, 0)]                                              # page 3: Freeze, in the fifth column
 PANEL_CODE = bytes.fromhex(
     "48b4"          # push {r3, r6} (r3 keeps the stack 8-byte aligned)
     "06a6"          # adr r6, table (0x08120c38)
@@ -71,8 +74,12 @@ PATCHES = [
     # M4: reverb page params, Style (0x155): name list and count 15 -> COUNT (movs r3, #0xf)
     (0x081370D4, u32(0x0814E70C), u32(M4_LIST)),
     (0x08136EE8, bytes.fromhex("0f23"), bytes([COUNT, 0x23])),
-    # M4: Diffusion and Spread on the reverb panel
+    # M4: Diffusion, Spread and Size on the reverb panel, Freeze to the right of them
     (PANEL_AT, PANEL_STOCK, panel_patch()),
+    # M4: FX panel pages, reverb slot in compact mode: allow page 2 (stock 0..1), where Freeze now is
+    (0x0812BFFA, bytes.fromhex("0229"), bytes.fromhex("0329")),   # next page: cmp r1,#2 (wrap) -> #3
+    (0x0812BFAE, bytes.fromhex("0129"), bytes.fromhex("0229")),   # page refresh: cmp r1,#1 (keep) -> #2
+    (0x0812C0F8, bytes.fromhex("0129"), bytes.fromhex("0229")),   # tap on a knob: cmp r1,#1 (ignore beyond) -> #2
     # M7: reverb process, after a style change: also send Diffusion and Spread back to the M4 (bl FUN_0804467c)
     (0x08048E6E, bl(0x08048E6E, 0x0804467C), bl(0x08048E6E, s7["hall_echo"])),
 ]

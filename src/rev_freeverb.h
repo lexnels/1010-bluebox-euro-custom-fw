@@ -6,6 +6,7 @@
  *   HI C      damping (bright at the top)
  *   Diffusion allpass feedback 0.3 .. 0.7 (stock Freeverb: 0.5)
  *   Spread    stereo width (applied by the wrapper)
+ *   Size      comb lengths x0.5 .. x2 (x1 = Freeverb's tuning at the middle), gliding
  *   Freeze    combs hold, input muted
  */
 #ifndef REV_FREEVERB_H
@@ -14,7 +15,7 @@
 
 #define FV_COMBS 8
 #define FV_APS 4
-#define FV_LINE 2048u            /* longest comb at 48 kHz is ~1785; power of two for masking */
+#define FV_LINE 4096u            /* longest comb at 48 kHz and Size x2 is ~3570; power of two for masking */
 
 static const float fv_comb44[FV_COMBS] = { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
 static const float fv_ap44[FV_APS] = { 556, 441, 341, 225 };
@@ -24,6 +25,7 @@ struct fv_state {
     uint32_t w;
     uint32_t comb_len[2][FV_COMBS], ap_len[2][FV_APS];
     float store[2][FV_COMBS];
+    float scale_s;               /* smoothed Size scale, < 0 = not set yet */
 };
 #define FV_STATE_FLOATS 128u
 #define FV_MEM_FLOATS (FV_STATE_FLOATS + 2u * (FV_COMBS + FV_APS) * FV_LINE)
@@ -33,6 +35,7 @@ static void fv_init(float *m, float fs)
     struct fv_state *st = (struct fv_state *)m;
     float r = fs / 44100.f;
     st->w = 0;
+    st->scale_s = -1.f;
     for (int c = 0; c < 2; c++) {
         for (int i = 0; i < FV_COMBS; i++) {
             uint32_t l = (uint32_t)((fv_comb44[i] + c * FV_SPREAD44) * r);
@@ -59,6 +62,15 @@ static void fv_process(float *m, const struct rev_knobs *k, float *L, float *R, 
     float gain = 0.015f, apfb = 0.3f + 0.4f * rv_clamp(k->diffusion, 0.f, 1.f);
     if (k->freeze) { room = 1.f; damp = 0.f; gain = 0.f; }
     float damp2 = 1.f - damp;
+    float scale_t = rv_exp2(2.f * (rv_clamp(k->size, 0.f, 1.f) - 0.5f));
+    if (st->scale_s < 0.f) st->scale_s = scale_t;
+    st->scale_s += (scale_t - st->scale_s) * 0.02f;       /* glide: Size bends pitch, never clicks */
+    uint32_t clen[2][FV_COMBS];
+    for (int c = 0; c < 2; c++)
+        for (int i = 0; i < FV_COMBS; i++) {
+            uint32_t l = (uint32_t)((float)st->comb_len[c][i] * st->scale_s);
+            clen[c][i] = l < FV_LINE ? l : FV_LINE - 1;
+        }
     const uint32_t M = FV_LINE - 1;
     uint32_t w = st->w;
     for (unsigned s = 0; s < n; s++) {
@@ -70,7 +82,7 @@ static void fv_process(float *m, const struct rev_knobs *k, float *L, float *R, 
 #pragma GCC unroll 8
             for (int i = 0; i < FV_COMBS; i++) {
                 float *b = base + i * FV_LINE;
-                float o = b[(w - st->comb_len[c][i]) & M];
+                float o = b[(w - clen[c][i]) & M];
                 st->store[c][i] = o * damp2 + st->store[c][i] * damp;
                 b[w & M] = in + st->store[c][i] * room;
                 acc += o;
