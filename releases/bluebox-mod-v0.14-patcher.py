@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bluebox eurorack custom firmware v0.14 (cpu+hall+delay+master): https://github.com/lexnels/1010-bluebox-euro-custom-fw
+"""BlueLex - 1010 Bluebox Euro modded firmware v0.14 (cpu+hall+delay+master): https://github.com/lexnels/1010-bluebox-euro-custom-fw
 
 Turns the stock 1010music firmware file into the modded one. Needs Python 3, nothing else.
 

@@ -1,4 +1,4 @@
-# bluebox eurorack custom firmware
+# BlueLex - 1010 Bluebox Euro modded firmware
 
 > [!WARNING]
 > **Install at your own risk.** This is unofficial custom firmware, not made or supported by 1010music. It hasn't
