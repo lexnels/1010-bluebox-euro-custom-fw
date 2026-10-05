@@ -1,36 +1,78 @@
-# 1010-bluebox-euro-custom-fw
+# bluebox eurorack custom firmware
 
-Custom firmware modifications for the 1010music **bluebox eurorack edition**
-(not the desktop bluebox; firmware images differ between the two).
+Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
+differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
 
-## Goals
+**Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware file so you can go
+back at any time.
 
-- Add a **CPU meter** to the UI. Done, works on hardware.
-- Add a new lush, creamy **hall reverb**: build `hall`, "FDN Hall" (first called Lush Hall) as a 16th reverb style.
-  Works on hardware.
-- Alternative reverb styles **MVerb**, **Squall** and **Freeverb**, and **Diffusion** and **Spread** knobs on the reverb
-  panel: build `hall`. Works on hardware.
-- **Size** knob, Freeze moved to the right of the knobs, and every style remembering its own knob settings: build
-  `hall`. Untested on hardware.
+## What it adds
 
-## Approach
+- **CPU meter:** a thin bar at the top right of the screen, right of the clock, showing the audio engine's load.
+  Green, amber above 70 %, red above 90 %; a white tick marks the recent peak.
+- **Four new reverb styles**, after the stock 15:
+  - **FDN Hall**: a lush, smooth hall built for this mod (an 8-line modulated feedback delay network).
+  - **MVerb**: a dense plate/hall, ported from Martin Eastwood's MVerb.
+  - **Squall**: the Mutable Instruments Clouds reverb, as voiced in Squall.
+  - **Freeverb**: the classic Freeverb.
+- **More reverb controls on the panel:** **Diffusion**, **Spread** and **Size** knobs, with **Freeze** moved to its
+  own column on the right. Diffusion and Spread also work on the stock styles; Size works on the four new styles.
+- **Each reverb style remembers its knobs.** Switch away and back, and its settings (and the knobs on screen) come
+  back. Until power-off.
 
-Follows the approach of [j3threejay/blackbox-mod](https://github.com/j3threejay/blackbox-mod):
-patching the stock firmware image rather than rebuilding from source.
+The reverb panel, two columns per encoder page:
 
-## Note on firmware images
+| page 1 | page 2 | page 3 |
+|---|---|---|
+| Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze |
 
-The stock firmware is 1010music's property and is **not** included in this repo.
-`*.bin` / `*.BIN` files are git-ignored. Download the official eurorack-edition
-firmware from 1010music and keep it locally.
+Good to know:
+- Switching to or from one of the new styles mutes the reverb for a moment while its memory is cleared.
+- On MVerb, Size takes effect when you stop turning the knob, with a short dropout.
+- A project saved with one of the new styles won't load that style on stock firmware.
 
-## What's in build `cpu`
+## Install
 
-- **CPU meter:** a 3-pixel vertical bar at the top right, right of the H:MM:SS clock. It shows the audio engine's load:
-  green, amber above 70 %, red above 90 %. A white tick marks the worst block of the last ~0.25 s. The clock label
-  is 6 px narrower to make room.
+You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
+it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-## What's in build `hall`
+1. Download `bluebox-mod-<version>-patcher.py` from the [latest release](https://github.com/lexnels/1010-bluebox-euro-custom-fw/releases/latest).
+2. In a terminal, run it on your stock firmware file:
+   ```
+   python3 bluebox-mod-v4-patcher.py "path/to/BLUEEURO 3.BIN"
+   ```
+   It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
+3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
+
+**Going back to stock:** install your stock firmware file the same way.
+
+## Versions
+
+| version | changes |
+|---|---|
+| v4 | Size knob, Freeze on the right, each style remembers its knobs, Lush Hall renamed FDN Hall |
+| v3 | MVerb, Squall and Freeverb styles; Diffusion and Spread knobs |
+| v2 | Lush Hall reworked: smoother, Time and Level work |
+| v1 | CPU meter, Lush Hall |
+
+v1 to v3 run on a real unit. v4 is tested in an emulator and not yet on hardware. Only v4 is published as a release.
+
+## Credits and licences
+
+- MVerb by Martin Eastwood ([martineastwood/mverb](https://github.com/martineastwood/mverb)), **GPL-3.0**. Its port is
+  kept in its own file, `src/rev_mverb.h`, under that licence.
+- Squall by Daniel Majid Mirzakhani ([DanielMajid/squall_reverb](https://github.com/DanielMajid/squall_reverb)); the
+  reverb core is by Emilie Gillet (Mutable Instruments), MIT.
+- Freeverb by Jezar at Dreampoint, public domain ([sinshu/freeverb](https://github.com/sinshu/freeverb)).
+- The patching approach follows [j3threejay/blackbox-mod](https://github.com/j3threejay/blackbox-mod).
+- The stock firmware is 1010music's property and is not included here, in the repo or in the releases. Releases
+  only carry the mod's own changes.
+
+---
+
+# Technical notes
+
+## The reverb styles in detail
 
 Four reverb styles after the stock 15 (Clouds), each with its own engine running in the stock reverb's delay memory:
 
@@ -44,16 +86,7 @@ Four reverb styles after the stock 15 (Clouds), each with its own engine running
 MVerb, Squall and Freeverb share a wrapper (`src/rev_common.h`) that adds the low cut, pre-delay, stereo width, level
 and a fade-in they lack.
 
-**Reverb panel.** The panel lays out its controls in columns of two, and the encoders work on two columns at a time.
-It now has 8 knobs and Freeze on its own at the right: Time, Level, **Diffusion**, **Spread** | **Size**, Pre Delay,
-Low Cut, HI C | Freeze (a third encoder page). Diffusion and Spread are the stock engine's own params, so they work on
-the stock styles too; Size only acts on the four new styles (the stock styles set their own size). Projects and FX
-presets save all of them.
-
-**Each style keeps its own knobs.** Leaving a style remembers its knob settings (all but Freeze); coming back puts
-them back and the panel's knobs move to them. A style you haven't used since power-on starts from its preset (stock
-styles) or the knobs as they were (new styles), with Time and Level at the middle, as the stock UI does. The memory
-lasts until power-off.
+What each control does per style:
 
 | control | FDN Hall | MVerb | Squall | Freeverb |
 |---|---|---|---|---|
@@ -69,11 +102,8 @@ lasts until power-off.
 
 Feedback, modulation, early reflections and Resonance aren't on the panel, so the new styles use fixed, tuned values
 for them. Size changes the decay along with the room in MVerb, Squall and Freeverb (Time is quoted at the middle Size).
-
-Switching to or from one of the new styles mutes the reverb for ~30 audio blocks while the shared delay memory is
-cleared. A project saved with one of the new styles won't load that style on stock firmware.
-
-**Licence note:** MVerb is GPL-3.0. Its port is kept in its own file, `src/rev_mverb.h`, under that licence.
+Pre Delay, Diffusion and Spread are the stock engine's own params; Size (`0x143`) is only used by the new styles and
+never reaches the stock engine, whose styles set their own size.
 
 ## Build
 
@@ -88,13 +118,10 @@ python3 test_cpu.py           # runs both hooks under Unicorn (pip install unico
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
+python3 tools/make_patcher.py cpu+hall v4   # -> out/release/bluebox-mod-v4-patcher.py (the release asset)
 ```
 
-## Install / go back
-
-Keep the stock file somewhere safe. To install, copy the patched file to the root of the microSD card under the same
-name the official update uses, then install it the way you'd install a 1010music update. To go back to stock, do the
-same with the stock file.
+Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.
 
 ## How it works
 
