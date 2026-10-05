@@ -107,7 +107,8 @@ check(uc.reg_read(UC_ARM_REG_PC) == M4TAIL and uc.reg_read(UC_ARM_REG_R4) == SET
 check([(i, v) for _, i, v in added] == [(0x155, 0), (0x159, 1000), (0x15A, 1000), (0x13E, 800), (0x146, 0), (0x143, 500),
       (0x13D, 475), (0x14A, 0), (0x148, 1000), (0x14F, 0)] and all(o == SET for o, _, _ in added),
       "M4 reverb list: Style, Time, Level, Diffusion, Spread, Size, Pre Delay, Low Cut, HI C, Freeze")
-check(data[file_off(0x0812BFFA)] == 3 and data[file_off(0x0812BFAE)] == 2 and data[file_off(0x0812C0F8)] == 2,
+pages = (data[file_off(0x0812BFFA)], data[file_off(0x0812BFAE)], data[file_off(0x0812C0F8)])
+check(pages == (3, 2, 2) or pages == (4, 3, 3),      # with the delay patchset: 4, and dly_page wraps after the last widget
       "M4 reverb panel: a third encoder page (Freeze, fifth column)")
 
 # ---- fake reverb object, buses, events

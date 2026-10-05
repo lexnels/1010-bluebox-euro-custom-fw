@@ -64,7 +64,7 @@ struct dly_shared {
 #define DS ((struct dly_shared *)0x38800d00u)   /* after hall_shared, before the CPU meter at 0xf00 */
 #define DS_MAGIC 0x44454c5au                     /* "ZLED" */
 _Static_assert(sizeof(struct hall_shared) <= 0xd00, "hall state below the delay state");
-_Static_assert(0xd00 + sizeof(struct dly_shared) <= 0xf00, "delay state below the CPU meter");
+_Static_assert(0xd00 + sizeof(struct dly_shared) <= 0xec0, "delay state below the M4 panel record (0xec0) and the CPU meter (0xf00)");
 
 static struct dly_shared *dly_state(void)
 {
@@ -229,19 +229,6 @@ void dly_tone(float *x, unsigned n, const float *coef, float *state)
     z[0] = z1; z[1] = z2;
 }
 
-/* BEAT, PING and QUAD are off the panel: Delay always in ms (stock powers up beat-synced, and its reset event
- * turns sync back on), ping-pong always on, QUAD off. A change marks the time dirty, so the body recomputes the
- * line lengths. */
-static void d_modes(uint8_t *obj)
-{
-    if (obj[0x271] || !obj[0x274] || obj[0x276]) {
-        obj[0x271] = 0;
-        obj[0x274] = 1;
-        obj[0x276] = 0;
-        obj[0x272] = 1;
-    }
-}
-
 /* Replaces the delay's vtable slot 3 (0x0806ba70, stock FUN_08053b30). */
 unsigned dly_process(uint8_t *obj, void *ctx)
 {
@@ -270,9 +257,9 @@ unsigned dly_process(uint8_t *obj, void *ctx)
     if (n > D_MAXN) n = D_MAXN;
     dly_prepare(d, n);
 
-    /* pitch runs with its switch on and a non-zero amount, in lines E and F (only QUAD uses them, and it is kept
-     * off); starting it clears its rings */
-    int want = d->pitch_on && d->pitch != 0;
+    /* pitch runs with its switch on and a non-zero amount, in lines E and F, so not while QUAD+PING uses them;
+     * starting it clears its rings, which hold old QUAD echoes otherwise */
+    int want = d->pitch_on && d->pitch != 0 && !(obj[0x276] && obj[0x274]);
     if (want && !d->p_live) {
         for (int c = 0; c < 2; c++) {
             float *ring = *(float **)(obj + (c ? 0xbc : 0xa0));
@@ -284,9 +271,7 @@ unsigned dly_process(uint8_t *obj, void *ctx)
         }
     }
     d->p_live = (uint32_t)want;
-    d_modes(obj);
     fw_dly_body(obj, ctx);
-    d_modes(obj);
 
     /* keep Send x wet for the reverb's next block */
     float g = rv_clamp((float)d->send * 1e-3f, 0.f, 1.f);
