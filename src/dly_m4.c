@@ -15,7 +15,7 @@ typedef void (*def_fn)(void *table, unsigned id, unsigned type, const char *labe
 void dly_defs(void *table, unsigned id, unsigned type, const char *label, int min, int max, const char *key)
 {
     fw_def(table, id, type, label, min, max, key);
-    fw_def(table, 0x3a, KNOB, "Flutter:", 0, 1000, "dlyflutter");
+    fw_def(table, 0x3a, KNOB, "Drift:", 0, 1000, "dlyflutter");   /* key kept from when it was Flutter */
     fw_def(table, 0x3d, KNOB, "Send:", 0, 1000, "dlysend");
     fw_def(table, 0x4a, INT, "Pitch:", -12, 12, "dlypitch");
     fw_def(table, 0x4b, TOGGLE, "Pitch:", 0, 1, "dlypitchon");
@@ -24,9 +24,13 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
 /*
  * The FX panel (FUN_0812bc60 populate, FUN_0812c110 layout) draws its widgets in compact mode in 5 columns of 2,
  * column-major in list order, from x0 + 48; the 48 px left of that are empty. The delay has 12 (7 knobs, 5 buttons),
- * so after populate and layout we move four: FILT (7) under Send, BEAT and PING (8, 9) to the empty column on the
- * left, PITCH and QUAD (10, 11) to column 5. Each widget slot i has a knob and a toggle (populate shows the one its
- * param needs); we move both, the same way layout does. Other panels get the stock positions back.
+ * so we move three: BEAT and PING (8, 9) to the empty column on the left, PITCH and QUAD (10, 11) to column 5 (FILT,
+ * 7, is already under Send). Each widget slot i has a knob and a toggle (populate shows the one its param needs); we
+ * move both, the same way layout does. Other panels get the stock positions back.
+ *
+ * Only through setRect (vtable +0x20), never by poking fields: v0.7/0.8 also set byte +0x3d of each widget as a
+ * "dirty" flag, which on a button is inside its label's y position (+0x3c, see FUN_0813940c) and threw every
+ * button label off screen. Widgets are only moved when they aren't already in place.
  */
 #include <stdint.h>
 typedef void (*vfn_rect)(void *w, int *rect);
@@ -35,42 +39,43 @@ typedef void (*layout_fn)(uint8_t *panel);
 #define fw_populate ((populate_fn)0x0812bc61)
 #define fw_layout ((layout_fn)0x0812c111)
 #define P_COMPACT_OFF 0xc398        /* u8: 0 = compact (the only mode stock uses) */
-#define P_SLOT 0xc3a4               /* u16: the FX slot shown, 0x14 = delay */
+#define P_SLOT 0xc3a4               /* u16: the slot populate last showed (0x14 delay, 0x15 reverb) */
 #define KNOB_W(p, i) ((uint8_t *)(p) + 0xc3b0 + (i) * 0x3d0)
 #define TOG_W(p, i) ((uint8_t *)(p) + 0x100b0 + (i) * 0x1d4)
-#define W_DIRTY 0x3d
 
-static const int8_t DLY_COL[12] = { 0, 0, 1, 1, 2, 2, 3, 3, -1, -1, 4, 4 };
+static const int8_t DLY_COL[4] = { -1, -1, 4, 4 };  /* widgets 8..11 on the delay panel */
 
-static void place(uint8_t *p)
+static void move(uint8_t *w, int x, int y)
 {
-    if (p[P_COMPACT_OFF])
+    if (*(int *)(w + 4) == x && *(int *)(w + 8) == y)
         return;
-    int dly = *(uint16_t *)(p + P_SLOT) == 0x14;
+    int r[4] = { x, y, 0x30, 0x2c };
+    (*(vfn_rect **)w)[0x20 / 4](w, r);
+}
+
+static void place(uint8_t *p, int slot)
+{
+    if (p[P_COMPACT_OFF] || (uint16_t)(slot - 0x14) >= 2)
+        return;
     int x0 = *(int *)(p + 4), y0 = *(int *)(p + 8);
-    for (int i = 0; i < 12; i++) {
-        int col = dly ? DLY_COL[i] : i >> 1;
-        int r[4] = { x0 + 0x30 * (col + 1), y0 + 0x2d - 0x2c * (i & 1), 0x30, 0x2c };
-        uint8_t *kw = KNOB_W(p, i), *tw = TOG_W(p, i);
-        (*(vfn_rect **)kw)[0x20 / 4](kw, r);
-        int r2[4] = { r[0], r[1], r[2], r[3] };
-        (*(vfn_rect **)tw)[0x20 / 4](tw, r2);
-        kw[W_DIRTY] = 1;
-        tw[W_DIRTY] = 1;
+    for (int i = 8; i < 12; i++) {
+        int col = slot == 0x14 ? DLY_COL[i - 8] : i >> 1;
+        int x = x0 + 0x30 * (col + 1), y = y0 + 0x2d - 0x2c * (i & 1);
+        move(KNOB_W(p, i), x, y);
+        move(TOG_W(p, i), x, y);
     }
-    p[W_DIRTY] = 1;
 }
 
 /* the three bl FUN_0812bc60 (populate) */
 void dly_populate(uint8_t *p, short *slot)
 {
+    place(p, *slot);
     fw_populate(p, slot);
-    place(p);
 }
 
 /* the bl FUN_0812c110 (layout) */
 void dly_layout(uint8_t *p)
 {
     fw_layout(p);
-    place(p);
+    place(p, *(short *)(p + P_SLOT));
 }

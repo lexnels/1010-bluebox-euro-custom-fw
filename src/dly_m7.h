@@ -1,5 +1,5 @@
 /*
- * FX1 delay additions, M7 side: Pitch (every repeat shifted again), Flutter, Send to Reverb. Included by hall_m7.c
+ * FX1 delay additions, M7 side: Pitch (every repeat shifted again), Drift, Send to Reverb. Included by hall_m7.c
  * (same cave; it needs the reverb hook for the send).
  *
  * Stock delay (vtable 0x0806ba64, 0x278 bytes, slot 0x14, bus 13, wet only on its bus): process FUN_08053b30 =
@@ -17,7 +17,8 @@
  *                them), runs the stock body, then keeps Send x the wet output for the reverb.
  *   dly_read     replaces the line reads: the stock read (its glide after a time change is kept), then re-reads the
  *                same line a variable amount further back (or nearer the write head):
- *                - flutter: a slowly wobbling extra delay while the line is steady, like tape;
+ *                - drift (the old Flutter, still id 0x3a): a slowly wobbling, wandering extra delay while the line
+ *                  is steady, like tape (up to 16 ms, about +-2.5 % pitch);
  *                - pitch: plain resampling, like changing tape speed: the read slides through the line at the pitch
  *                  ratio and jumps back every delay time (at most 100 ms), with a 5 ms crossfade. No grains or
  *                  windows beyond that splice, so going up repeats a little and going down skips a little. Each pass
@@ -27,13 +28,13 @@
  *   (14) at the start of the next block's hall_process: one block (32 samples, 0.7 ms) late.
  *
  * Params (new ids, free in both cores' tables; defined on the M4 by src/dly_m4.c):
- *   0x3a Flutter 0..1000, 0x3d Send 0..1000, 0x4a Pitch -12..12 semitones, 0x4b Pitch on/off
+ *   0x3a Drift 0..1000, 0x3d Send 0..1000, 0x4a Pitch -12..12 semitones, 0x4b Pitch on/off
  */
 #define fw_dly_body ((process_fn)FN(0x08053234))
 #define fw_line_read ((line_fn)FN(0x08059d54))
 typedef void (*line_fn)(uint32_t *line, void *bus, int ch);
 
-#define D_FLUTTER 0x3a
+#define D_FLUTTER 0x3a           /* shown as Drift */
 #define D_SEND    0x3d
 #define D_PITCH   0x4a
 #define D_PITCHON 0x4b
@@ -89,20 +90,21 @@ static float d_rand(struct dly_shared *d)    /* -1..1 */
     return (float)(int32_t)d->rng * (1.f / 2147483648.f);
 }
 
-/* Once per block, before the stock body: the flutter amount and the pitch ratio for this block. */
+/* Once per block, before the stock body: the drift amount and the pitch ratio for this block. */
 static void dly_prepare(struct dly_shared *d, unsigned n)
 {
-    /* flutter: a slow 0.6 Hz wobble plus a slower random drift; extra delay 0 .. 2A, A up to 2.5 ms */
+    /* drift (id "flutter"): a slow 0.6 Hz wobble plus a slower random wander; extra delay 0 .. 2A, A up to 8 ms
+     * (about +-2.5 % pitch at full) */
     float depth = rv_clamp((float)d->flutter * 1e-3f, 0.f, 1.f);
-    float fa = depth * depth * 0.0025f * D_FS;
+    float fa = depth * 0.008f * D_FS;
     d->fl_ph += 0.6f * (float)n / D_FS;
     if (d->fl_ph >= 1.f) d->fl_ph -= 1.f;
-    if ((d->fl_count++ & 511u) == 0) d->fl_target = d_rand(d);          /* a new drift target every ~0.34 s */
+    if ((d->fl_count++ & 511u) == 0) d->fl_target = d_rand(d);          /* a new wander target every ~0.34 s */
     d->fl_noise += (d->fl_target - d->fl_noise) * 0.004f;
     float s = d_sin(d->fl_ph * 6.2831853f - 3.1415927f);
     d->m0 = d->m1;
-    d->m1 = fa > 0.f ? fa * (1.f + 0.8f * s + 0.2f * d->fl_noise) : 0.f;
-    if (d->m0 <= 0.f && d->m1 > 0.f) d->m0 = d->m1;                   /* flutter just turned on: no jump from 0 */
+    d->m1 = fa > 0.f ? fa * (1.f + 0.6f * s + 0.4f * d->fl_noise) : 0.f;
+    if (d->m0 <= 0.f && d->m1 > 0.f) d->m0 = d->m1;                   /* drift just turned on: no jump from 0 */
 
     int st = d->pitch_on ? d->pitch : 0;
     if (st < -12) st = -12;

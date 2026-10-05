@@ -36,7 +36,7 @@ time.
   - **Pitch** (with a **PITCH** on/off button): shifts each repeat by -12 to +12 semitones, like speeding up or
     slowing down tape, so with Feedback every repeat climbs or falls again (+12: an octave, two octaves, ...). With
     PING on, every bounce, left or right, is one more step.
-  - **Flutter**: a slow tape-style pitch wobble on the repeats.
+  - **Drift**: a slow, wandering tape-style pitch bend on the repeats, clearly audible at full (about ±2.5 %).
   - **Send**: feeds the echoes into the reverb.
 
   BEAT and PING sit in a column to the left of the knobs; FILT is under Send, and PITCH and QUAD (3&4 mode) are in
@@ -48,7 +48,7 @@ The panels, two columns per encoder page:
 | panel | page 1 | page 2 | page 3 |
 |---|---|---|---|
 | Reverb | Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze |
-| Delay | Delay, Feedback, Cutoff, Width | Pitch, Flutter, Send, FILT | BEAT, PING, PITCH, QUAD (3&4 mode) |
+| Delay | Delay, Feedback, Cutoff, Width | Pitch, Drift, Send, FILT | BEAT, PING, PITCH, QUAD (3&4 mode) |
 
 Good to know:
 - Switching to or from one of the new styles mutes the reverb for a moment while its memory is cleared.
@@ -58,7 +58,7 @@ Good to know:
 - Pitch is plain resampling: the delay reads its memory faster or slower and jumps back every delay time (at most
   every 100 ms) with a short crossfade. So pitched repeats land up to 100 ms early or late, going up repeats a little
   of the sound and going down skips a little. With Pitch at 0 or PITCH off the repeats are untouched.
-- Flutter adds up to a few milliseconds to the delay time. The delay's send reaches the reverb 0.7 ms late (the
+- Drift adds up to 16 ms to the delay time. The delay's send reaches the reverb 0.7 ms late (the
   reverb runs first).
 
 ## Install
@@ -66,11 +66,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.8-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.8-patcher.py)
+1. Download [`releases/bluebox-mod-v0.9-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.9-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.8-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.9-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -134,14 +134,14 @@ Filt is on, feeds it back into its lines and copies it to its bus. `src/dly_m7.h
   unknown ids), runs the stock body, then keeps Send x the wet output.
 - `dly_read` (all nine line reads, `FUN_08059d54`: the output reads plus the in-loop reads of PING and QUAD+PING)
   keeps the stock read and its glide after a time change, then re-reads the same line a variable amount further
-  back: Flutter, while the line is steady, a 0.6 Hz wobble plus a slow random drift (up to 2 x 2.5 ms); Pitch, a
+  back: Drift, while the line is steady, a 0.6 Hz wobble plus a slow random wander (up to 2 x 8 ms); Pitch, a
   read that slides at the pitch ratio and jumps back every delay time (at most 4800 samples) with a 240-sample
   crossfade. Each line read shifts once; in PING mode line C (2T, carrying the right side) shifts twice, since one
   pass through it spans two of the left side's.
 - The reverb runs before the delay in each block, so `hall_process` adds the kept send into the reverb's bus (14) at
   the start of the next block.
 
-New ids, free in both cores' tables: `0x3a` Flutter, `0x3d` Send (0..1000), `0x4a` Pitch (-12..12, a plain number, type 1), `0x4b` Pitch on/off.
+New ids, free in both cores' tables: `0x3a` Drift (saved under its old key `dlyflutter`), `0x3d` Send (0..1000), `0x4a` Pitch (-12..12, a plain number, type 1), `0x4b` Pitch on/off.
 `src/dly_m4.c` defines them in the M4 param table (hooking its last definition, `bl` at `0x0813714a`), the delay's
 param list (`FUN_0812060c` case 4, `0x08120bba`) is a table like the reverb's, and the delay panel pages like the
 reverb's instead of being pinned to page 1.
@@ -165,8 +165,8 @@ python3 test_cpu.py           # runs both hooks under Unicorn (pip install unico
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
-python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, flutter, send, cost
-python3 tools/make_patcher.py cpu+hall+delay v0.8   # -> out/release/bluebox-mod-v0.8-patcher.py (copy it to releases/)
+python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
+python3 tools/make_patcher.py cpu+hall+delay v0.9   # -> out/release/bluebox-mod-v0.9-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

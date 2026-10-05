@@ -59,7 +59,7 @@ check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) ==
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 delay list: reaches the common tail with r4, r5, sp intact")
 check(added == [(0x33, 400), (0x39, 400), (0x0E, 120), (0xCB, 1000), (0x4A, 0), (0x3A, 0), (0x3D, 0), (0xCA, 1),
                 (0x35, 1), (0x36, 1), (0x4B, 0), (0x37, 0), (0x34, 6)],
-      "M4 delay list: Delay, Feedback, Cutoff, Width, Pitch, Flutter, Send, FILT, BEAT, PING, PITCH, QUAD")
+      "M4 delay list: Delay, Feedback, Cutoff, Width, Pitch, Drift, Send, FILT, BEAT, PING, PITCH, QUAD")
 
 # ---- M4: param definitions (the last stock one, then ours)
 defs = []
@@ -73,9 +73,9 @@ h = uc.hook_add(UC_HOOK_CODE, m4_def, begin=0x08135E08, end=0x08135E08)
 STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 call(s4["dly_defs"], 0x24032000, 0x117, 5, STR, stack=(-7, 9, STR + 8))
 uc.hook_del(h)
-check(defs == [(0x117, 5, "Lbl:", -7, 9, "key"), (0x3A, 8, "Flutter:", 0, 1000, "dlyflutter"), (0x3D, 8, "Send:", 0, 1000, "dlysend"),
+check(defs == [(0x117, 5, "Lbl:", -7, 9, "key"), (0x3A, 8, "Drift:", 0, 1000, "dlyflutter"), (0x3D, 8, "Send:", 0, 1000, "dlysend"),
                (0x4A, 1, "Pitch:", -12, 12, "dlypitch"), (0x4B, 4, "Pitch:", 0, 1, "dlypitchon")],
-      "M4 param table: the stock definition passes through, then Flutter, Send, Pitch (-12..12, whole numbers), Pitch on/off")
+      "M4 param table: the stock definition passes through, then Drift, Send, Pitch (-12..12, whole numbers), Pitch on/off")
 # ---- M4: the FX panel layout (dly_populate / dly_layout around the stock populate and layout)
 P, VT, STUB = 0x24040000, 0x24038000, 0x24039000
 uc.mem_write(P, bytes(0x12000))
@@ -87,18 +87,23 @@ rects, X0, Y0 = {}, 10, 100
 for i in range(16):
     uc.mem_write(KW(i), struct.pack("<I", VT)); uc.mem_write(TW(i), struct.pack("<I", VT))
 uc.mem_write(P + 4, struct.pack("<ii", X0, Y0))
-def on_rect(uc, a, sz, _):
+moves = []
+def on_rect(uc, a, sz, _):                                       # stand-in setRect: stores the rect at +4 like stock
     w = uc.reg_read(UC_ARM_REG_R0); rects[w] = rd(uc.reg_read(UC_ARM_REG_R1), "<4i")
-layout = []
+    uc.mem_write(w + 4, struct.pack("<4i", *rects[w])); moves.append((w, populated[0]))
+layout, populated = [], [0]
 def on_populate(uc, a, sz, _):                                   # stand-in: knob or toggle per entry, the rest hidden
+    populated[0] += 1
     uc.mem_write(P + 0xC3A4, bytes(uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 2)))
     for i in range(16):
         k = layout[i] if i < len(layout) and i < 12 else 0
         uc.mem_write(KW(i) + 0x30, bytes([k != 1])); uc.mem_write(TW(i) + 0x30, bytes([k != 2]))
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 def on_layout(uc, a, sz, _):                                     # stand-in for the stock layout: the stock rects
-    for i in range(10):
-        for w in (KW(i), TW(i)): rects[w] = (X0 + 0x30 * (i // 2 + 1), Y0 + 0x2D - 0x2C * (i % 2), 0x30, 0x2C)
+    for i in range(16):
+        for w in (KW(i), TW(i)):
+            rects[w] = (X0 + 0x30 * (i // 2 + 1), Y0 + 0x2D - 0x2C * (i % 2), 0x30, 0x2C)
+            uc.mem_write(w + 4, struct.pack("<4i", *rects[w]))
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 hooks = [uc.hook_add(UC_HOOK_CODE, on_rect, begin=STUB + 2, end=STUB + 2),
          uc.hook_add(UC_HOOK_CODE, on_populate, begin=0x0812BC60, end=0x0812BC60),
@@ -112,11 +117,19 @@ def shown():                                                     # widget -> (kn
     return out
 SLOT = 0x24037000; uc.mem_write(SLOT, struct.pack("<h", 0x14))
 check(data[0x0812BEDE - 0x08100000 + 0xC0000:][:4] == bytes.fromhex("b9f10b0f"), "M4 panel: populate shows up to 12 widgets")
+call(0x0812C110 | 1, P)                                          # (stand-in) stock layout first: everything stock
 layout[:] = [1] * 7 + [2] * 5                                    # the delay in 3&4 mode: 7 knobs, 5 buttons
+moves.clear(); n0 = populated[0]
 call(s4["dly_populate"], P, SLOT)
 want = {0: (1, 0, 0), 1: (1, 0, 1), 2: (1, 1, 0), 3: (1, 1, 1), 4: (1, 2, 0), 5: (1, 2, 1), 6: (1, 3, 0),
         7: (2, 3, 1), 8: (2, -1, 0), 9: (2, -1, 1), 10: (2, 4, 0), 11: (2, 4, 1)}
 check(shown() == want, "M4 panel, delay: knobs in columns 1-4, FILT under Send, BEAT and PING left, PITCH and QUAD right")
+check(moves and all(n == n0 for _, n in moves), "widgets are moved before populate runs")
+check(all(rd(TW(i) + 0x3C, "<I")[0] == 0 for i in range(16)), "no stray writes into the buttons' label position (+0x3c)")
+moves.clear()
+call(s4["dly_populate"], P, SLOT)
+check(not moves, "already in place: nothing moved again")
+moves.clear(); n0 = populated[0]
 call(s4["dly_layout"], P)
 check(shown() == want, "layout (screen redraw): the same")
 layout[:] = [1] * 7 + [2] * 4                                    # 3&4 mode off: no QUAD
@@ -226,7 +239,7 @@ check(all(math.isfinite(x) and abs(x) < 4 for x in out + R), "QUAD + PING with P
 settle([(0x37, 0), (0x36, 1), (0x39, 0), (0x4B, 0)])
 run(lambda t: 0.0, 4 * 48000 // N)
 
-# Flutter: a held 1 kHz sine through the delay; the echo's zero-crossing spacing wobbles with Flutter, not without
+# Drift: a held 1 kHz sine through the delay; the echo's zero-crossing spacing wobbles with Drift, not without
 def crossings(x):
     z = [i + x[i] / (x[i] - x[i + 1]) for i in range(len(x) - 1) if x[i] <= 0 < x[i + 1]]
     d = [b - a for a, b in zip(z, z[1:])]
@@ -238,9 +251,9 @@ m0, dev0 = crossings(out[T + 1000:])
 events([(0x3A, 1000)])
 out = run(lambda t: math.sin(2 * math.pi * 1000 * t / 48000), 3 * 48000 // N)
 m1, dev1 = crossings(out[24000:])
-print(f"     1 kHz period {m0:.3f} samples, wobble {dev0 / m0 * 100:.3f} % without flutter, {dev1 / m1 * 100:.3f} % with")
-check(dev0 / m0 < 0.0005 and 0.003 < dev1 / m1 < 0.02, "Flutter wobbles the pitch slowly (under 2 %)")
-check(all(math.isfinite(x) and abs(x) < 1.5 for x in out), "Flutter: output stays clean")
+print(f"     1 kHz period {m0:.3f} samples, wobble {dev0 / m0 * 100:.3f} % without drift, {dev1 / m1 * 100:.3f} % with")
+check(dev0 / m0 < 0.0005 and 0.015 < dev1 / m1 < 0.04, "Drift bends the pitch clearly but slowly (1.5 to 4 %)")
+check(all(math.isfinite(x) and abs(x) < 1.5 for x in out), "Drift: output stays clean")
 
 # cost: our additions on top of the stock body, with everything on
 icount = {"n": 0}
