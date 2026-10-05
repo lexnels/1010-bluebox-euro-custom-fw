@@ -9,8 +9,8 @@
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
 differs). It patches the official firmware and adds features to it. Everything stock still works.
 
-**Based on:** the official bluebox eurorack edition firmware **version 3** from 1010music, the file
-`BLUEEURO 3.BIN` (1,113,628 bytes, SHA-256 `fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b`).
+**Based on:** the official bluebox eurorack edition firmware **version 1.5.1** from 1010music, the file
+`BLUEEURO.BIN` (1,113,628 bytes, SHA-256 `fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b`).
 The patcher only accepts that exact file, so it won't work on other versions.
 
 The CPU meter, reverb and delay additions run on a real unit; the compressor meter and Saturate are tested in an
@@ -77,12 +77,13 @@ Good to know:
 
 ## Install
 
-You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
+You need your own copy of the official bluebox eurorack firmware **version 1.5.1** from 1010music (the mod can't include
 it).
 
 **In your browser (easiest):** open the [web patcher](https://lexnels.github.io/1010-bluebox-euro-custom-fw/), choose
-your stock `BLUEEURO 3.BIN`, and save the `BLUEEURO.BIN` it gives you. The file never leaves your computer: the page
-patches it locally. Then copy it to the microSD card as in step 3 below.
+your stock 1.5.1 `BLUEEURO.BIN`, and save the modded `BLUEEURO.BIN` it gives you. The file never leaves your computer: the page
+patches it locally. If your browser saves it as `BLUEEURO (1).BIN` because the stock file is in the same folder,
+rename it to `BLUEEURO.BIN`. Then copy it to the microSD card as in step 3 below.
 
 **Or with Python 3** (built into macOS; on Windows get it from python.org):
 
@@ -90,10 +91,11 @@ patches it locally. Then copy it to the microSD card as in step 3 below.
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.14-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.14-patcher.py "path/to/stock/BLUEEURO.BIN"
    ```
-   It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
-3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
+   It checks that the file is the right stock firmware, then writes the modded `BLUEEURO.BIN` into a `modded` folder
+   next to the patcher, so your stock file is never overwritten.
+3. Copy the modded `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
 
 **Going back to stock:** install your stock firmware file the same way.
 
@@ -198,7 +200,7 @@ and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the
 
 ## Build
 
-Needs `arm-none-eabi-gcc` and Python 3. Put your stock image at `firmware/BLUEEURO-3.bin`
+Needs `arm-none-eabi-gcc` and Python 3. Put your stock 1.5.1 image at `firmware/BLUEEURO-3.bin` (the name the scripts expect)
 (SHA-256 `fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b`).
 
 ```

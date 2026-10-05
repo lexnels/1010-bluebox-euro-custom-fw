@@ -53,9 +53,9 @@
 
   <div class="card">
     <ol>
-      <li>Get the official bluebox eurorack firmware <strong>version 3</strong> (<code>BLUEEURO 3.BIN</code>) from 1010music.</li>
+      <li>Get the official bluebox eurorack firmware <strong>version 1.5.1</strong> (<code>BLUEEURO.BIN</code>) from 1010music.</li>
       <li>Choose that file below. It stays on your computer: the patching happens in this page.</li>
-      <li>Save <code>BLUEEURO.BIN</code>, copy it to the root of the microSD card and install it like a 1010music update.</li>
+      <li>Save the modded <code>BLUEEURO.BIN</code>, copy it to the root of the microSD card and install it like a 1010music update. If your browser saves it as <code>BLUEEURO (1).BIN</code>, rename it to <code>BLUEEURO.BIN</code> first.</li>
     </ol>
     <label class="drop" id="drop">
       <input type="file" id="file">
@@ -93,7 +93,7 @@ async function patch(file) {
     say("Checking " + file.name + " ...");
     const data = new Uint8Array(await file.arrayBuffer());
     if (await sha256(data) !== STOCK_SHA256) {
-      say("That isn't the stock version 3 firmware this mod is built for (its fingerprint doesn't match). Nothing was changed.", "bad");
+      say("That isn't the stock 1.5.1 firmware this mod is built for (its fingerprint doesn't match). Nothing was changed.", "bad");
       return;
     }
     const blob = await inflate(PATCH), view = new DataView(blob.buffer);

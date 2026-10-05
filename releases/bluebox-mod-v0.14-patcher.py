@@ -5,7 +5,7 @@ Turns the stock 1010music firmware file into the modded one. Needs Python 3, not
 
   python3 bluebox-mod-v0.14-patcher.py <stock firmware file> [output file]
 
-The output defaults to BLUEEURO.BIN next to this script. This file holds only the mod's changes, not 1010music's
+The output defaults to modded/BLUEEURO.BIN next to this script (your stock file keeps its name). This file holds only the mod's changes, not 1010music's
 firmware: you need your own copy of the stock file (eurorack edition, SHA-256 fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b).
 """
 import base64, hashlib, os, struct, sys, zlib
@@ -344,6 +344,10 @@ while at < len(blob):
     data[ofs:ofs + n] = blob[at + 8:at + 8 + n]
     at += 8 + n
 assert hashlib.sha256(data).hexdigest() == MOD_SHA256, "patched result doesn't match; nothing written"
-out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "BLUEEURO.BIN")
+# the stock file is also called BLUEEURO.BIN, so by default write into a "modded" folder next to this script
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "modded", "BLUEEURO.BIN")
+if os.path.exists(out) and os.path.samefile(out, sys.argv[1]):
+    sys.exit("The output would overwrite your stock file. Give a different output path. Nothing written.")
+os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 open(out, "wb").write(data)
 print("wrote", out, "- copy it to the root of the microSD card and install it like a 1010music update.")
