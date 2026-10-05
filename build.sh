@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compile the code caves: CPU meter out/cm7 (M7 side) and out/cm4 (M4 side), hall reverb out/hall7 (M7).
+# Compile the code caves: CPU meter out/cm7 (M7 side) and out/cm4 (M4 side), reverb + delay out/hall7 (M7), delay params out/dly4 (M4).
 set -e
 cd "$(dirname "$0")"
 mkdir -p out
@@ -11,3 +11,6 @@ arm-none-eabi-objcopy -O binary -j .cave out/cm7.elf out/cm7.bin
 arm-none-eabi-objcopy -O binary -j .cave out/cm4.elf out/cm4.bin
 arm-none-eabi-objcopy -O binary -j .cave out/hall7.elf out/hall7.bin
 arm-none-eabi-size -A out/cm7.elf out/cm4.elf out/hall7.elf | grep -E 'cave|elf'
+arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 $COMMON -T src/dly4.ld -o out/dly4.elf src/dly_m4.c
+arm-none-eabi-objcopy -O binary -j .cave out/dly4.elf out/dly4.bin
+arm-none-eabi-size -A out/dly4.elf | grep -E 'cave|elf'

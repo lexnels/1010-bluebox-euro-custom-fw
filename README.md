@@ -3,8 +3,8 @@
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
 differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
 
-The CPU meter and the new reverb styles run on a real unit; the Size knob, Freeze position and knob memory are tested
-in an emulator so far. **Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware
+The CPU meter and the new reverb styles run on a real unit; the reverb's Size knob, Freeze position and knob memory
+and the delay additions are tested in an emulator so far. **Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware
 file so you can go back at any time.
 
 ## What it adds
@@ -26,28 +26,36 @@ file so you can go back at any time.
   own column on the right. Diffusion and Spread also work on the stock styles; Size works on the four new styles.
 - **Each reverb style remembers its knobs.** Switch away and back, and its settings (and the knobs on screen) come
   back. Until power-off.
+- **Delay:** **Flutter** (a slow tape-style pitch wobble on the repeats), **Send** (feeds the echoes into the reverb),
+  and **Low Cut** and **High Cut** in place of the single Cutoff/Width filter. Both cuts act inside the feedback loop,
+  so each repeat gets thinner and darker. The BEAT, PING and QUAD buttons sit to the right of the knobs.
+  Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
 
-The reverb panel, two columns per encoder page:
+The panels, two columns per encoder page:
 
-| page 1 | page 2 | page 3 |
-|---|---|---|
-| Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze |
+| panel | page 1 | page 2 | page 3 |
+|---|---|---|---|
+| Reverb | Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze |
+| Delay | Delay, Feedback, Low Cut, High Cut | Flutter, Send, BEAT, PING | QUAD (in 3&4 mode) |
 
 Good to know:
 - Switching to or from one of the new styles mutes the reverb for a moment while its memory is cleared.
 - On MVerb, Size takes effect when you stop turning the knob, with a short dropout.
 - A project saved with one of the new styles won't load that style on stock firmware.
+- Delay Low Cut runs from 20 Hz to 2 kHz and High Cut from 500 Hz to 20 kHz (fully up is open). Flutter adds up to a
+  few milliseconds to the delay time. The delay's send reaches the reverb 0.7 ms late (the reverb runs first).
+- Old projects keep their delay settings but not the old Cutoff/Width; the new knobs start at their defaults.
 
 ## Install
 
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v4-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v4-patcher.py)
+1. Download [`releases/bluebox-mod-v5-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v5-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v4-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v5-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -102,6 +110,24 @@ for them. Size changes the decay along with the room in MVerb, Squall and Freeve
 Pre Delay, Diffusion and Spread are the stock engine's own params; Size (`0x143`) is only used by the new styles and
 never reaches the stock engine, whose styles set their own size.
 
+## The delay additions in detail
+
+The stock delay (FX1: vtable `0x0806ba64`, bus 13, wet only) reads its delayed signal, runs a band-pass on it when
+Filt is on, feeds it back into its lines and copies it to its bus. `src/dly_m7.h` hooks that path:
+
+- `dly_process` (vtable slot `0x0806ba70`) picks up the new params from the event queue (the stock loop ignores
+  unknown ids), forces Filt on, runs the stock body, then keeps Send x the wet output.
+- `dly_read` (the four line reads) keeps the stock read and its glide after a time change; while a line is steady it
+  re-reads the same samples a little further back, by a 0.6 Hz wobble plus a slow random drift (up to 2 x 2.5 ms).
+- `dly_tone` (the two band-pass calls) is a 12 dB/oct high-pass then low-pass, inside the loop.
+- The reverb runs before the delay in each block, so `hall_process` adds the kept send into the reverb's bus (14) at
+  the start of the next block.
+
+New ids, free in both cores' tables: `0x3a` Flutter, `0x3d` Send, `0x43` Low Cut, `0x4a` High Cut (0..1000).
+`src/dly_m4.c` defines them in the M4 param table (hooking its last definition, `bl` at `0x0813714a`), the delay's
+param list (`FUN_0812060c` case 4, `0x08120bba`) is a table like the reverb's, and the delay panel pages like the
+reverb's instead of being pinned to page 1. State lives in backup SRAM at `0x38800d00`.
+
 ## Build
 
 Needs `arm-none-eabi-gcc` and Python 3. Put your stock image at `firmware/BLUEEURO-3.bin`
@@ -111,11 +137,13 @@ Needs `arm-none-eabi-gcc` and Python 3. Put your stock image at `firmware/BLUEEU
 ./build.sh
 python3 patch.py cpu          # -> out/cpu/BLUEEURO.BIN
 python3 patch.py cpu hall     # -> out/cpu+hall/BLUEEURO.BIN (patchsets combine)
+python3 patch.py cpu hall delay   # -> out/cpu+hall+delay/BLUEEURO.BIN (the full mod; delay needs hall)
 python3 test_cpu.py           # runs both hooks under Unicorn (pip install unicorn capstone)
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
-python3 tools/make_patcher.py cpu+hall v4   # -> out/release/bluebox-mod-v4-patcher.py (copy it to releases/)
+python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: echoes, cuts, flutter, send, cost
+python3 tools/make_patcher.py cpu+hall+delay v5   # -> out/release/bluebox-mod-v5-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

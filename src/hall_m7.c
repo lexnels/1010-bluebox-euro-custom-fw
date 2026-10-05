@@ -372,9 +372,12 @@ static void engine_run(int eng, const struct hall_slot *sl, float *mem, float *l
     rw_post(rw, &k, l, r, n);
 }
 
+#include "dly_m7.h"
+
 /* Replaces vtable slot 0x0806adac (process). */
 unsigned hall_process(uint8_t *obj, void *ctx)
 {
+    dly_send_into(obj, ctx);                  /* the delay's Send to Reverb, from the block before */
     struct hall_slot *sl = slot_for(obj);
     if (!sl)
         return fw_process(obj, ctx);

@@ -126,6 +126,14 @@ events([])
 # stock style: everything goes to the stock engine
 r, _, _ = block([0.0] * N, [0.0] * N)
 check(calls["process"] == 1 and r == 1, "stock style: hall_process runs the stock engine")
+# the delay's Send to Reverb (src/dly_m7.h): last block's kept wet signal is added to the reverb's bus first
+DS = 0x38800D00
+uc.mem_write(DS, struct.pack("<I", 0x44454C59)); uc.mem_write(DS + 136, struct.pack("<I", N))
+uc.mem_write(DS + 140, struct.pack(f"<{N}f", *[0.25] * N) + struct.pack(f"<{N}f", *[-0.5] * N))
+_, l, rr = block([0.1] * N, [0.1] * N)
+check(all(abs(x - 0.35) < 1e-6 for x in l) and all(abs(x + 0.4) < 1e-6 for x in rr) and rd(uc, DS + 136, "<I")[0] == 0,
+      "delay send: added into the reverb's input once, before the reverb runs")
+calls["process"] -= 1                    # that block ran the stock engine once more; the counts below don't include it
 call(s7["hall_set"] | 1, OBJ, 0x144, s0=900.0)
 check(calls["set"][-1] == (0x144, 900.0), "knob changes still reach the stock setter")
 call(s7["hall_set"] | 1, OBJ, 0x143, s0=600.0)
