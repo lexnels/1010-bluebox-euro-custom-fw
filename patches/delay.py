@@ -1,4 +1,4 @@
-"""FX1 delay: Resonance, Pitch (with its on/off button), Flutter and Send to Reverb; buttons right of the knobs, sliding panel.
+"""FX1 delay: Pitch (with its on/off button), Flutter and Send to Reverb; buttons beside the knobs, two on the left.
 
 M7 code is in src/dly_m7.h (built into the hall cave, out/hall7), M4 code in src/dly_m4.c (out/dly4). Needs the hall
 patchset too: the send reaches the reverb through hall_process, and the panel page limit it raises is shared.
@@ -14,19 +14,19 @@ def u32(v):
     return struct.pack("<I", v)
 
 # M4: the delay slot's param list (FUN_0812060c, case 4 @0x08120bba, 98 bytes up to case 5), the same table loop as
-# the reverb's. List order is screen order: columns of 2, column-major; knobs first, so the toggles end up on the
-# right. The panel draws 10 of the 13, so it slides with the encoder page (dly_m4.c, patches below).
+# the reverb's. List order is the encoder order (pages of 4); dly_m4.c places the widgets: knobs in columns 1-4 (with
+# FILT under Send), BEAT and PING in a column left of the knobs, PITCH and QUAD in column 5. QUAD (only listed in 3&4
+# mode) is last, so leaving it out moves nothing.
 LIST_AT = 0x08120BBA
 LIST_STOCK = bytes.fromhex(
     "4ff4c87233212046fff70efd4ff4c87239212046fff708fd78220e212046fff703fd4ff47a72cb212046fff7fdfc"
     "012235212046fff7f8fc0122ca212046fff7f3fc012236212046fff7eefc002237212046fff7e9fc062234212046fff7e4fc37e6")
-LIST_IDS = [(0x33, 400), (0x39, 400),       # column 1: Delay, Feedback
-            (0x0E, 120), (0xCB, 1000),      # column 2: Cutoff, Width (stock band-pass)
-            (0x43, 0), (0x4A, 12),          # column 3: Resonance, Pitch (+12 semitones)
-            (0x3A, 0), (0x3D, 0),           # column 4: Flutter, Send (to reverb)
-            (0xCA, 1), (0x4B, 0),           # column 5: FILT, PITCH (on/off)
-            (0x35, 1), (0x36, 1),           # column 6: BEAT (sync), PING   (the panel slides to show 6 and 7)
-            (0x37, 0),                      # column 7: QUAD (shown only in 3&4 mode)
+LIST_IDS = [(0x33, 400), (0x39, 400),       # Delay, Feedback               column 1
+            (0x0E, 120), (0xCB, 1000),      # Cutoff, Width (stock band-pass) column 2
+            (0x4A, 0), (0x3A, 0),           # Pitch (semitones), Flutter      column 3
+            (0x3D, 0), (0xCA, 1),           # Send (to reverb), FILT          column 4
+            (0x35, 1), (0x36, 1),           # BEAT (sync), PING               left of column 1
+            (0x4B, 0), (0x37, 0),           # PITCH (on/off), QUAD (3&4 mode) column 5
             (0x34, 6)]                      # the beat-synced time (1/4T): stands in for Delay when BEAT is on
 LIST_CODE = bytes.fromhex(
     "48b4"          # push {r3, r6}
@@ -46,29 +46,25 @@ def list_patch():
     assert len(LIST_IDS) <= 16 and len(t) <= len(LIST_STOCK)
     return t + bytes.fromhex("00bf") * ((len(LIST_STOCK) - len(t)) // 2)
 
+READS = (0x08053574, 0x08053594, 0x08053816, 0x080538EC, 0x0805385C, 0x08053688, 0x080536B8, 0x08053706, 0x08053720)
+
 PATCHES = [
     (0x080D8000, bytes(len(code4)), code4),
-    # M4: param table, last definition (id 0x117) -> dly_defs, which then defines the four new ids
+    # M4: param table, last definition (id 0x117) -> dly_defs, which then defines the new ids
     (0x0813714A, bl(0x0813714A, 0x08135E08), bl(0x0813714A, s4["dly_defs"])),
     (LIST_AT, LIST_STOCK, list_patch()),
     # M4: FX panel pages: stock pins the delay's encoders to page 0 (its page 1 was only toggles); give it the
     # reverb's paging instead (beq to the 0x15 branch)
     (0x0812BF90, bytes.fromhex("02d0"), bytes.fromhex("06d0")),
     (0x0812BFCE, bytes.fromhex("02d0"), bytes.fromhex("06d0")),
-    # ...and allow 4 pages (the hall patch set 3); dly_page wraps after the last widget, so the reverb still has 3
-    (0x0812BFFA, bytes.fromhex("0329"), bytes.fromhex("0429")),   # next page: cmp r1,#3 -> #4 (wrap to 0)
-    (0x0812BFAE, bytes.fromhex("0229"), bytes.fromhex("0329")),   # page refresh: cmp r1,#2 (keep) -> #3
-    (0x0812C0F8, bytes.fromhex("0229"), bytes.fromhex("0329")),   # tap select: ignore pages > 2 -> > 3
-    # M4: populate hides widgets past the 10th in compact mode (cmp.w r9,#9; bls): never (#15); slide() hides them
-    (0x0812BEDE, bytes.fromhex("b9f1090f"), bytes.fromhex("b9f10f0f")),
-    # M4: the panel's calls to populate, page select and layout -> our wrappers, which then slide the panel
+    # M4: populate hides widgets past the 10th in compact mode (cmp.w r9,#9; bls): past the 12th (#11) instead
+    (0x0812BEDE, bytes.fromhex("b9f1090f"), bytes.fromhex("b9f10b0f")),
+    # M4: the panel's calls to populate and layout -> our wrappers, which then place the delay's widgets
     *[(a, bl(a, 0x0812BC60), bl(a, s4["dly_populate"])) for a in (0x0812C086, 0x0812C554, 0x0812C59A)],
-    *[(a, bl(a, 0x0812BBFC), bl(a, s4["dly_page"])) for a in (0x0812BF9A, 0x0812BFBC, 0x0812BFD8, 0x0812BFF4, 0x0812C100)],
     (0x0812C544, bl(0x0812C544, 0x0812C110), bl(0x0812C544, s4["dly_layout"])),
     # M7: delay vtable 0x0806ba64, slot 3 (process FUN_08053b30) -> dly_process
     (0x0806BA70, u32(0x08053B31), u32(s7["dly_process"] | 1)),
-    # M7: the four S0 line reads (bl FUN_08059d54) -> dly_read (flutter)
-    *[(a, bl(a, 0x08059D54), bl(a, s7["dly_read"])) for a in (0x08053574, 0x08053594, 0x08053816, 0x080538EC)],
-    # M7: the band-pass calls (bl FUN_08056dd8) -> dly_tone (Resonance after the stock band-pass)
-    *[(a, bl(a, 0x08056DD8), bl(a, s7["dly_tone"])) for a in (0x08053602, 0x08053610)],
+    # M7: every line read (bl FUN_08059d54) -> dly_read (flutter, pitch): the S0 reads, then the in-loop reads of
+    # PING (line A) and QUAD+PING (A, C, E, F)
+    *[(a, bl(a, 0x08059D54), bl(a, s7["dly_read"])) for a in READS],
 ]

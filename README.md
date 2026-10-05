@@ -33,43 +33,44 @@ time.
 - **Each reverb style remembers its knobs.** Switch away and back, and its settings (and the knobs on screen) come
   back. Until power-off.
 - **Delay:** the stock **Cutoff** and **Width** band-pass (on with **FILT**) plus:
-  - **Resonance**: a peak at the Cutoff, inside the feedback loop, so the repeats ring at that pitch.
-  - **Pitch** (with a **PITCH** on/off button): shifts each repeat by -12 to +12 semitones, so with Feedback every
-    repeat climbs or falls again (+12: an octave, two octaves, ...).
+  - **Pitch** (with a **PITCH** on/off button): shifts each repeat by -12 to +12 semitones, like speeding up or
+    slowing down tape, so with Feedback every repeat climbs or falls again (+12: an octave, two octaves, ...). With
+    PING on, every bounce, left or right, is one more step.
   - **Flutter**: a slow tape-style pitch wobble on the repeats.
   - **Send**: feeds the echoes into the reverb.
 
-  The buttons (FILT, PITCH, BEAT, PING, and QUAD in 3&4 mode) sit to the right of the knobs. The panel shows 10
-  controls at a time, so when you page the encoders onto the buttons it slides over to bring the rest into view.
+  BEAT and PING sit in a column to the left of the knobs; FILT is under Send, and PITCH and QUAD (3&4 mode) are in
+  the column on the right.
   Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
 
 The panels, two columns per encoder page:
 
-| panel | page 1 | page 2 | page 3 | page 4 |
-|---|---|---|---|---|
-| Reverb | Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze | |
-| Delay | Delay, Feedback, Cutoff, Width | Resonance, Pitch, Flutter, Send | FILT, PITCH, BEAT, PING (slides one column) | QUAD, in 3&4 mode (slides two) |
+| panel | page 1 | page 2 | page 3 |
+|---|---|---|---|
+| Reverb | Time, Level, Diffusion, Spread | Size, Pre Delay, Low Cut, HI C | Freeze |
+| Delay | Delay, Feedback, Cutoff, Width | Pitch, Flutter, Send, FILT | BEAT, PING, PITCH, QUAD (3&4 mode) |
 
 Good to know:
 - Switching to or from one of the new styles mutes the reverb for a moment while its memory is cleared.
 - On MVerb, Size takes effect when you stop turning the knob, with a short dropout.
 - A project saved with one of the new styles won't load that style on stock firmware.
-- Cutoff runs from 80 Hz to 10 kHz and Width from half an octave to 8 octaves, as stock. Resonance only acts with
-  FILT on. Pitch adds a little latency to each repeat (up to 50 ms); with Pitch at 0 or PITCH off the repeats are
-  untouched. Flutter adds up to a few milliseconds to the delay time. The delay's send reaches the reverb 0.7 ms late
-  (the reverb runs first).
-- Pitch pauses while QUAD and PING are both on (QUAD needs the delay lines Pitch uses).
+- Cutoff runs from 80 Hz to 10 kHz and Width from half an octave to 8 octaves, as stock.
+- Pitch is plain resampling: the delay reads its memory faster or slower and jumps back every delay time (at most
+  every 100 ms) with a short crossfade. So pitched repeats land up to 100 ms early or late, going up repeats a little
+  of the sound and going down skips a little. With Pitch at 0 or PITCH off the repeats are untouched.
+- Flutter adds up to a few milliseconds to the delay time. The delay's send reaches the reverb 0.7 ms late (the
+  reverb runs first).
 
 ## Install
 
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.7-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.7-patcher.py)
+1. Download [`releases/bluebox-mod-v0.8-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.8-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.7-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.8-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -131,26 +132,24 @@ Filt is on, feeds it back into its lines and copies it to its bus. `src/dly_m7.h
 
 - `dly_process` (vtable slot `0x0806ba70`) picks up the new params from the event queue (the stock loop ignores
   unknown ids), runs the stock body, then keeps Send x the wet output.
-- `dly_read` (the four line reads) keeps the stock read and its glide after a time change; while a line is steady it
-  re-reads the same samples a little further back, by a 0.6 Hz wobble plus a slow random drift (up to 2 x 2.5 ms).
-  With Pitch on it then runs the read through a two-tap granular shifter (50 ms Hann grains, 8192-sample rings in
-  lines E and F, which only Quad+Ping uses, so Pitch pauses then).
-- `dly_tone` (the two band-pass calls) runs the stock band-pass, then for Resonance a peaking biquad at the Cutoff
-  (up to +18 dB, Q up to 8, with the level pulled down to match) and a soft limit, so high Feedback rings out
-  instead of running away.
+- `dly_read` (all nine line reads, `FUN_08059d54`: the output reads plus the in-loop reads of PING and QUAD+PING)
+  keeps the stock read and its glide after a time change, then re-reads the same line a variable amount further
+  back: Flutter, while the line is steady, a 0.6 Hz wobble plus a slow random drift (up to 2 x 2.5 ms); Pitch, a
+  read that slides at the pitch ratio and jumps back every delay time (at most 4800 samples) with a 240-sample
+  crossfade. Each line read shifts once; in PING mode line C (2T, carrying the right side) shifts twice, since one
+  pass through it spans two of the left side's.
 - The reverb runs before the delay in each block, so `hall_process` adds the kept send into the reverb's bus (14) at
   the start of the next block.
 
-New ids, free in both cores' tables: `0x3a` Flutter, `0x3d` Send, `0x43` Resonance (0..1000), `0x4a` Pitch (-12..12), `0x4b` Pitch on/off.
+New ids, free in both cores' tables: `0x3a` Flutter, `0x3d` Send (0..1000), `0x4a` Pitch (-12..12, a plain number, type 1), `0x4b` Pitch on/off.
 `src/dly_m4.c` defines them in the M4 param table (hooking its last definition, `bl` at `0x0813714a`), the delay's
 param list (`FUN_0812060c` case 4, `0x08120bba`) is a table like the reverb's, and the delay panel pages like the
 reverb's instead of being pinned to page 1.
 
-The FX panel (`FUN_0812bc60` populate, `FUN_0812c110` layout, `FUN_0812bbfc` page select) draws 10 widgets in 5
-columns of 2 and hides the rest. Its "hide past 10" check (`0x0812bede`) is patched out, and every call to the three
-functions goes through a wrapper in `src/dly_m4.c` that records which slots are knobs or buttons (in backup SRAM at
-`0x38800ec0`), then places the widgets in a 5-column window that slides just far enough to show the encoder page's two
-columns, wrapping the page after the last widget (up to 4 pages). With 10 or fewer widgets this is the stock layout. State lives in backup SRAM at `0x38800d00`.
+The FX panel (`FUN_0812bc60` populate, `FUN_0812c110` layout) draws 10 widgets in 5 columns of 2, from 48 px in, and
+hides the rest. Its "hide past 10" check (`0x0812bede`) now allows 12, and the calls to populate and layout go through
+wrappers in `src/dly_m4.c` that move four of the delay's widgets: FILT under Send, BEAT and PING into the empty 48 px
+column on the left, PITCH and QUAD into column 5. Other panels get the stock positions. State lives in backup SRAM at `0x38800d00`.
 
 ## Build
 
@@ -166,8 +165,8 @@ python3 test_cpu.py           # runs both hooks under Unicorn (pip install unico
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
-python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: sliding panel, echoes, resonance, pitch, flutter, send, cost
-python3 tools/make_patcher.py cpu+hall+delay v0.7   # -> out/release/bluebox-mod-v0.7-patcher.py (copy it to releases/)
+python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, flutter, send, cost
+python3 tools/make_patcher.py cpu+hall+delay v0.8   # -> out/release/bluebox-mod-v0.8-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.
