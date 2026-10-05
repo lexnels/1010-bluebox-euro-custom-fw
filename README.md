@@ -3,8 +3,9 @@
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
 differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
 
-**Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware file so you can go
-back at any time.
+The CPU meter and the new reverb styles run on a real unit; the Size knob, Freeze position and knob memory are tested
+in an emulator so far. **Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware
+file so you can go back at any time.
 
 ## What it adds
 
@@ -12,9 +13,15 @@ back at any time.
   Green, amber above 70 %, red above 90 %; a white tick marks the recent peak.
 - **Four new reverb styles**, after the stock 15:
   - **FDN Hall**: a lush, smooth hall built for this mod (an 8-line modulated feedback delay network).
-  - **MVerb**: a dense plate/hall, ported from Martin Eastwood's MVerb.
-  - **Squall**: the Mutable Instruments Clouds reverb, as voiced in Squall.
-  - **Freeverb**: the classic Freeverb.
+    Source: [`src/hall_dsp.h`](src/hall_dsp.h).
+  - **MVerb**: a dense plate/hall, ported from Martin Eastwood's [MVerb](https://github.com/martineastwood/mverb).
+    Port: [`src/rev_mverb.h`](src/rev_mverb.h).
+  - **Squall**: the Mutable Instruments Clouds reverb, as voiced in
+    [Squall](https://github.com/DanielMajid/squall_reverb). Port: [`src/rev_squall.h`](src/rev_squall.h).
+  - **Freeverb**: the classic [Freeverb](https://github.com/sinshu/freeverb).
+    Port: [`src/rev_freeverb.h`](src/rev_freeverb.h).
+
+  The three ports share a wrapper, [`src/rev_common.h`](src/rev_common.h), for low cut, pre-delay, width and level.
 - **More reverb controls on the panel:** **Diffusion**, **Spread** and **Size** knobs, with **Freeze** moved to its
   own column on the right. Diffusion and Spread also work on the stock styles; Size works on the four new styles.
 - **Each reverb style remembers its knobs.** Switch away and back, and its settings (and the knobs on screen) come
@@ -46,17 +53,6 @@ it), and Python 3 (built into macOS; on Windows get it from python.org).
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
 
 **Going back to stock:** install your stock firmware file the same way.
-
-## Versions
-
-| version | changes |
-|---|---|
-| v4 | Size knob, Freeze on the right, each style remembers its knobs, Lush Hall renamed FDN Hall |
-| v3 | MVerb, Squall and Freeverb styles; Diffusion and Spread knobs |
-| v2 | Lush Hall reworked: smoother, Time and Level work |
-| v1 | CPU meter, Lush Hall |
-
-v1 to v3 run on a real unit. v4 is tested in an emulator and not yet on hardware. Only v4 has a patcher in `releases/`.
 
 ## Credits and licences
 
@@ -156,8 +152,3 @@ redirected to it. The file size doesn't change.
 
 `ghidra/` has headless import/decompile scripts (Ghidra 11.4.2 + its bundled pyghidra). `tools.py` has address and
 branch helpers.
-
-## Hardware status
-
-- Build `cpu` flashed and works on a real unit (2026-10-04). The bootloader accepts a modified image of the same size,
-  and the screen's memory rows run top-down as assumed.
