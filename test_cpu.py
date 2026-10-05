@@ -13,7 +13,7 @@ s7, s4 = symbols("out/cm7.elf"), symbols("out/cm4.elf")
 def machine():
     uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
     uc.mem_map(0x08000000, 0x200000); uc.mem_write(0x08040000, data[:0xA0000]); uc.mem_write(0x08100000, data[0xC0000:])
-    for base, size in [(0x24000000, 0x80000), (0x38800000, 0x1000), (0x58024000, 0x1000), (0xE000E000, 0x1000), (0xC0000000, 0x40000)]:
+    for base, size in [(0x24000000, 0x80000), (0x30000000, 0x48000), (0x38800000, 0x1000), (0x58024000, 0x1000), (0xE000E000, 0x1000), (0xC0000000, 0x40000)]:
         uc.mem_map(base, size)
     uc.reg_write(UC_ARM_REG_SP, 0x2407F000)
     return uc

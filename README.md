@@ -9,8 +9,8 @@
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
 differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
 
-The CPU meter and the new reverb styles run on a real unit; the reverb's Size knob, Freeze position and knob memory
-and the delay additions are tested in an emulator so far. Keep your stock firmware file so you can go back at any
+The CPU meter, reverb and delay additions run on a real unit; the compressor meter and Saturate are tested in an
+emulator so far. Keep your stock firmware file so you can go back at any
 time.
 
 ## What it adds
@@ -42,6 +42,14 @@ time.
   BEAT and PING sit in a column to the left of the knobs; FILT is under Send, and PITCH and QUAD (3&4 mode) are in
   the column on the right.
   Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
+- **Compressor meter:** while the settings page is open and the master compressor is on, the CPU meter's bar shows
+  the compressor's input level against its threshold instead: from 30 dB below (bottom) to 12 dB above (top). Green
+  below the threshold, red once it reaches or passes it; a white tick marks the threshold while the level is under it.
+- **Master saturator:** a **Saturate** control at the bottom of the settings page (after the compressor's). A soft,
+  tape-like clipper on the master bus after the compressor, before the master level. At 0 it's off and the sound is
+  untouched; turning it up lifts and rounds the quieter parts (up to about +17 dB at full on a -20 dB signal) while
+  full scale stays at full scale. It's saved with the project like the other settings.
+  Source: [`src/mst_m7.c`](src/mst_m7.c).
 
 The panels, two columns per encoder page:
 
@@ -66,11 +74,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.9-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.9-patcher.py)
+1. Download [`releases/bluebox-mod-v0.10-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.10-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.9-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.10-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -151,6 +159,24 @@ hides the rest. Its "hide past 10" check (`0x0812bede`) now allows 12, and the c
 wrappers in `src/dly_m4.c` that move four of the delay's widgets: FILT under Send, BEAT and PING into the empty 48 px
 column on the left, PITCH and QUAD into column 5. Other panels get the stock positions. State lives in backup SRAM at `0x38800d00`.
 
+## The master additions in detail
+
+The master compressor (graph node `0x0a`, vtable `0x0806acb0`, event queue `0xc`, on the master bus) has its process
+method `FUN_08042a90` (vtable slot `0x0806acbc`) replaced by `mst_process` (`src/mst_m7.c`, cave at `0x080A0000`). It
+picks up Saturate (id `0x43`) from the compressor's queue, runs the stock compressor with its next-node link cleared
+so it doesn't chain, reads its state (detector envelope at `+0xbc`/`+0xd4`, gain at `+0xc0`/`+0xd8`, threshold `+0xf4`
+and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the bus, then runs the next node.
+
+- Meter: every 32 blocks (about 21 ms) the loudest level over the threshold and the most gain reduction go to backup
+  SRAM at `0x38800f40` (`src/mst_shared.h`). The M4's CPU meter (`src/cm4_cpu.c`) draws that instead of the load while
+  the settings page (`app + 0x1e9e8`, kind `0xc`) is the current page and the compressor is on.
+- Saturator: `y = sat(a x) / sat(a)`, `a = 8 Drive^2`, `sat(x) = x (27 + x^2) / (27 + 9 x^2)` (a tanh-like curve,
+  exactly ±1 from |x| = 3). Changes ramp across a block. Skipped at 0 and on a silent bus. About 1400 instructions
+  per 32-sample block.
+- Saturate is defined in the M4 param table next to the delay's (`src/dly_m4.c`, key `mstdrive`), added to the global
+  param set after its last entry (`bl` at `0x08120b90` -> `mst_set_add`), and appended to the settings page's id list
+  (`0x0814d966`).
+
 ## Build
 
 Needs `arm-none-eabi-gcc` and Python 3. Put your stock image at `firmware/BLUEEURO-3.bin`
@@ -160,13 +186,14 @@ Needs `arm-none-eabi-gcc` and Python 3. Put your stock image at `firmware/BLUEEU
 ./build.sh
 python3 patch.py cpu          # -> out/cpu/BLUEEURO.BIN
 python3 patch.py cpu hall     # -> out/cpu+hall/BLUEEURO.BIN (patchsets combine)
-python3 patch.py cpu hall delay   # -> out/cpu+hall+delay/BLUEEURO.BIN (the full mod; delay needs hall)
+python3 patch.py cpu hall delay master   # -> out/cpu+hall+delay+master/BLUEEURO.BIN (the full mod; delay needs hall, master needs cpu and delay)
 python3 test_cpu.py           # runs both hooks under Unicorn (pip install unicorn capstone)
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
-python3 tools/make_patcher.py cpu+hall+delay v0.9   # -> out/release/bluebox-mod-v0.9-patcher.py (copy it to releases/)
+python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
+python3 tools/make_patcher.py cpu+hall+delay+master v0.10   # -> out/release/bluebox-mod-v0.10-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

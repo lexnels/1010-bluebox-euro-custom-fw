@@ -4,7 +4,7 @@
  *
  * The table (FUN_08135e34) is an array indexed by id with a slot for every id below 0x20b; each definition is a call
  * FUN_08135e08(table, id, type, label, min, max, key). dly_defs replaces the last one (bl @0x0813714a, id 0x117) and
- * adds ours after it. Ids 0x3a, 0x3d, 0x4a, 0x4b are undefined in both cores' tables and used nowhere else.
+ * adds ours after it. Ids 0x3a, 0x3d, 0x4a, 0x4b, 0x43 are undefined in both cores' tables and used nowhere else.
  */
 typedef void (*def_fn)(void *table, unsigned id, unsigned type, const char *label, int min, int max, const char *key);
 #define fw_def ((def_fn)0x08135e09)
@@ -19,6 +19,18 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, 0x3d, KNOB, "Send:", 0, 1000, "dlysend");
     fw_def(table, 0x4a, INT, "Pitch:", -12, 12, "dlypitch");
     fw_def(table, 0x4b, TOGGLE, "Pitch:", 0, 1, "dlypitchon");
+    fw_def(table, 0x43, KNOB, "Saturate:", 0, 1000, "mstdrive");     /* master saturator (patches/master.py) */
+}
+
+/* Master saturator Drive (0x43) in the global set (FUN_0812060c case 2), so edits are kept, saved with the project and
+ * re-sent to the M7 on load: replaces the set's last add (bl FUN_081205e2 @0x08120b90, id 0x162) and adds ours after
+ * it. The settings page shows it because patches/master.py puts 0x43 at the end of that page's id list. */
+typedef void (*add_fn)(void *set, unsigned id, int value);
+#define fw_add ((add_fn)0x081205e3)
+void mst_set_add(void *set, unsigned id, int value)
+{
+    fw_add(set, id, value);
+    fw_add(set, 0x43, 0);
 }
 
 /*

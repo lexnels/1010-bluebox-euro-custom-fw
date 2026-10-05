@@ -9,8 +9,13 @@
  * Memory rows run top-down. The clock label is narrowed by 6 px (patch in patches/cpu.py) to make room.
  * The bar fills from the bottom with the average load: green, amber above 70 %, red above 90 %.
  * The peak shows as one white row. No data from the M7 yet: nothing is drawn.
+ *
+ * While the settings page is open and the master compressor is on, the same bar shows the compressor instead
+ * (src/mst_m7.c publishes it): its detector level against the threshold, from 30 dB below (bottom) to 12 dB above
+ * (top). Green up to the threshold, red past it; the threshold row is white while the level is below it.
  */
 #include "cpu_shared.h"
+#include "mst_shared.h"
 
 #define FN(addr) ((addr) | 1u)
 typedef void (*flip_fn)(void *display, int layer, int a2, int a3);
@@ -36,6 +41,20 @@ static void put(uint8_t *p, unsigned fmt, uint32_t c)
     }
 }
 
+/* Is the settings page (the list page showing object 0xc, where the compressor lives) on screen? The app object is
+ * *(void **)0x3000e63c; its page manager's current page is at +0x2b4, the list page instance at +0x1e9e8, and the
+ * page's object at +0xa3e0. */
+static int in_ram(uint32_t a) { return (a >= 0x24000000u && a < 0x24080000u) || (a >= 0x30000000u && a < 0x30048000u) ||
+                                       (a >= 0xc0000000u && a < 0xc4000000u) || (a >= 0x20000000u && a < 0x20020000u); }
+static int comp_page(void)
+{
+    uint32_t app = *(volatile uint32_t *)0x3000e63cu;
+    if (!in_ram(app) || !in_ram(app + 0x1e9e8u + 0xa3e2u))
+        return 0;
+    uint32_t page = *(volatile uint32_t *)(app + 0x2b4u);
+    return page == app + 0x1e9e8u && *(volatile uint16_t *)(page + 0xa3e0u) == 0xc;
+}
+
 static void draw(const uint8_t *d)
 {
     if (!d)
@@ -51,6 +70,23 @@ static void draw(const uint8_t *d)
         return;
 
     bkp_enable();
+    if (comp_page()) {
+        volatile struct mst_meter *m = MST_METER;
+        if (m->magic == MST_MAGIC && m->on) {
+            int over = m->over;                                    /* 0.1 dB above the threshold */
+            int lit = (over + 300) * BAR_H / 420;                  /* rows lit from the bottom */
+            int thr = 300 * BAR_H / 420;                           /* the threshold's row from the bottom */
+            for (int k = 0; k < BAR_H; k++) {
+                unsigned row = BAR_Y0 + BAR_H - 1u - (unsigned)k;
+                uint32_t c = k < lit ? (k >= thr ? rgb(255, 40, 40) : rgb(0, 200, 80))
+                                     : k == thr ? rgb(255, 255, 255) : rgb(48, 48, 48);
+                uint8_t *p = px + (row * w + BAR_X) * bpp;
+                for (unsigned x = 0; x < BAR_W; x++, p += bpp)
+                    put(p, fmt, c);
+            }
+            return;
+        }
+    }
     volatile struct cpu_shared *s = CPU_SHARED;
     if (s->magic != CPU_MAGIC)
         return;

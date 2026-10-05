@@ -74,8 +74,9 @@ STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 call(s4["dly_defs"], 0x24032000, 0x117, 5, STR, stack=(-7, 9, STR + 8))
 uc.hook_del(h)
 check(defs == [(0x117, 5, "Lbl:", -7, 9, "key"), (0x3A, 8, "Drift:", 0, 1000, "dlyflutter"), (0x3D, 8, "Send:", 0, 1000, "dlysend"),
-               (0x4A, 1, "Pitch:", -12, 12, "dlypitch"), (0x4B, 4, "Pitch:", 0, 1, "dlypitchon")],
-      "M4 param table: the stock definition passes through, then Drift, Send, Pitch (-12..12, whole numbers), Pitch on/off")
+               (0x4A, 1, "Pitch:", -12, 12, "dlypitch"), (0x4B, 4, "Pitch:", 0, 1, "dlypitchon"),
+               (0x43, 8, "Saturate:", 0, 1000, "mstdrive")],
+      "M4 param table: the stock definition passes through, then Drift, Send, Pitch (-12..12, whole numbers), Pitch on/off, Saturate")
 # ---- M4: the FX panel layout (dly_populate / dly_layout around the stock populate and layout)
 P, VT, STUB = 0x24040000, 0x24038000, 0x24039000
 uc.mem_write(P, bytes(0x12000))
