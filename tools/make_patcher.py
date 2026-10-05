@@ -63,7 +63,7 @@ if os.path.exists(out) and os.path.samefile(out, sys.argv[1]):
     sys.exit("The output would overwrite your stock file. Give a different output path. Nothing written.")
 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 open(out, "wb").write(data)
-print("wrote", out, "- copy it to the root of the microSD card and install it like a 1010music update.")
+print("wrote", out, "- copy it to the root of the microSD card and install it like a 1010music update by booting while holding the A button.")
 '''
 os.makedirs(os.path.join(ROOT, "out", "release"), exist_ok=True)
 path = os.path.join(ROOT, "out", "release", f"bluebox-mod-{version}-patcher.py")

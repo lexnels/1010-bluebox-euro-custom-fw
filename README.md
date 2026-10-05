@@ -95,9 +95,9 @@ rename it to `BLUEEURO.BIN`. Then copy it to the microSD card as in step 3 below
    ```
    It checks that the file is the right stock firmware, then writes the modded `BLUEEURO.BIN` into a `modded` folder
    next to the patcher, so your stock file is never overwritten.
-3. Copy the modded `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
+3. Copy the modded `BLUEEURO.BIN` to the root of the microSD card and install it like a 1010music update by booting while holding the A button.
 
-**Going back to stock:** install your stock firmware file the same way.
+**Going back to stock:** install your stock firmware file the same way (copy it to the card, boot holding A).
 
 ## Credits and licences
 
