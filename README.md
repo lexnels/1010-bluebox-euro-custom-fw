@@ -76,11 +76,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.13-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.13-patcher.py)
+1. Download [`releases/bluebox-mod-v0.14-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.14-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.13-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.14-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -169,8 +169,9 @@ picks up Saturate (id `0x43`) from the compressor's queue, runs the stock compre
 so it doesn't chain, reads its state (detector envelope at `+0xbc`/`+0xd4`, gain at `+0xc0`/`+0xd8`, threshold `+0xf4`
 and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the bus, then runs the next node.
 
-- Meter: the compressor's own gain reduction, `MK - min(LG_L, LG_R)` (no extra detection), maxed over 32 blocks
-  (about 21 ms) and written to backup SRAM at `0x38800f40` (`src/mst_shared.h`); about 160 instructions per block. On
+- Meter: the compressor's gain reduction, the larger of `MK - min(LG_L, LG_R)` and the gain curve applied to the louder
+  detector level (`(1 - 1/ratio) (log2 env - T)`, soft-kneed; independent of the makeup), maxed over 32 blocks
+  (about 21 ms) and written to backup SRAM at `0x38800f40` (`src/mst_shared.h`); about 210 instructions per block. On
   the M4 (`src/cm4_cpu.c`, in the flip hook) it's drawn while the settings page (`app + 0x1e9e8`, kind `0xc`) is
   current: the list (`page + 0x9c8`, laid out by `FUN_081400e2`) has rows of 0x330 bytes from `+0xe8` with their rect at
   `+4`, hidden byte `+0x30` and id at `+0x32c`; the bar goes in the bottom 3 px of the visible row with id `0x132`
@@ -201,7 +202,7 @@ cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on t
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
-python3 tools/make_patcher.py cpu+hall+delay+master v0.13   # -> out/release/bluebox-mod-v0.13-patcher.py (copy it to releases/)
+python3 tools/make_patcher.py cpu+hall+delay+master v0.14   # -> out/release/bluebox-mod-v0.14-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.

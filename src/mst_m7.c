@@ -58,6 +58,14 @@ static float exp2f_(float x)        /* 0 <= x < 8 */
     v.u += (uint32_t)i << 23;
     return v.f;
 }
+static float log2f_(float x)        /* x > 0, ~1e-4 */
+{
+    union { float f; uint32_t u; } v = { x };
+    float e = (float)(int32_t)((v.u >> 23) & 0xff) - 127.f;
+    v.u = (v.u & 0x007fffffu) | 0x3f800000u;     /* 1 <= m < 2 */
+    float m = v.f - 1.f;
+    return e + m * (1.4425449f + m * (-0.7181452f + m * (0.4575485f + m * (-0.2779042f + m * (0.1217970f + m * -0.0258411f)))));
+}
 /* soft clip, tanh-like: x (27 + x^2) / (27 + 9 x^2), exactly +-1 from |x| = 3 */
 static float sat(float x)
 {
@@ -117,6 +125,17 @@ unsigned mst_process(uint8_t *obj, void *ctx)
         float g = *(float *)(obj + 0xc0), g_r = *(float *)(obj + 0xd8);
         if (g_r < g) g = g_r;
         float gr = *(float *)(obj + 0xfc) - g;
+        /* the same from the detector and the gain curve, independent of the makeup: (1 - 1/ratio) x how far the louder
+         * side's level is over the threshold (soft-kneed like FUN_08042534); the larger of the two is shown */
+        float env = *(float *)(obj + 0xbc), env_r = *(float *)(obj + 0xd4);
+        if (env_r > env) env = env_r;
+        if (env > 1e-6f) {
+            float slope = *(float *)(obj + 0x100), hw = *(float *)(obj + 0xf8);     /* 1/ratio, knee/2 */
+            float over = log2f_(env) - *(float *)(obj + 0xf4), c = 0.f;
+            if (over > hw) c = (1.f - slope) * over;
+            else if (hw > 0.f && over > -hw) c = (1.f - slope) * (over + hw) * (over + hw) / (4.f * hw);
+            if (c > gr) gr = c;
+        }
         if (gr > s->gr) s->gr = gr;
     }
     if (++s->blocks >= REPORT_BLOCKS)

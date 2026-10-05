@@ -121,6 +121,11 @@ gr = meter(uc)[2]
 print(f"     quiet: GR {gr / 10:.1f} dB")
 check(gr <= 5, "-40 dBFS sine: no gain reduction")
 
+for thr, auto, want in ((-40000, 1, 21.8), (-40000, 0, 21.8), (-48000, 1, 28.3), (-5000, 1, 0.0)):
+    uc, _ = run([(0xB5, 1), (0x132, thr), (0x135, auto)], 0.3, blocks=200)
+    gr = meter(uc)[2] / 10
+    check(abs(gr - want) < 1.0, f"-10 dBFS sine, threshold {thr / 1000:.0f} dB, auto makeup {auto}: GR {gr:.1f} dB (want {want})")
+
 uc, _ = run([(0xB5, 0)], 1.0)
 check(meter(uc)[3] == 0, "compressor off: reported off")
 
