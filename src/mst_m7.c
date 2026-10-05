@@ -15,6 +15,7 @@
  */
 #include "cpu_shared.h"
 #include "mst_shared.h"
+#include "usb_shared.h"
 
 #define FN(addr) ((addr) | 1u)
 typedef unsigned (*process_fn)(uint8_t *obj, void *ctx);
@@ -113,6 +114,8 @@ unsigned mst_process(uint8_t *obj, void *ctx)
     for (unsigned i = 0; fw_next_ev(q, i, &ev); i++)
         if (ev.type == 0x39 && ev.id == M_DRIVE)
             s->drive = ev.value;
+        else if (ev.type == 0x39 && ev.id == USB_MODE_ID)    /* USB Out setting, acted on by src/usb_m7.c */
+            usb_state()->want = ev.value != 0;
 
     uint8_t **pnext = (uint8_t **)(obj + 0x08), *next = *pnext;
     *pnext = 0;

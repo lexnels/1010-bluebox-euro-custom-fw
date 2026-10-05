@@ -22,8 +22,9 @@ def at(addr, n):
 # ---- patch bytes
 check(struct.unpack("<I", at(0x0806ACBC, 4))[0] == s7["mst_process"] | 1, "compressor process slot -> mst_process")
 check(at(0x08120B90, 4) == bl(0x08120B90, d4["mst_set_add"]), "global set's last add -> mst_set_add")
-ids = struct.unpack("<4H", at(0x0814D964, 8))
-check(ids[:3] == (0x13B, 0x43, 0), f"settings list ends 0x13b, 0x43, 0 ({' '.join(hex(i) for i in ids)})")
+ids = struct.unpack("<44H", at(0x0814D91C, 88))
+end = ids.index(0x13B)
+check(ids[end:end + 3] == (0x13B, 0x43, 0), f"settings list ends 0x13b, 0x43, 0 ({' '.join(hex(i) for i in ids[end:end + 3])})")
 
 def f2u(f): return struct.unpack("<I", struct.pack("<f", f))[0]
 

@@ -13,8 +13,8 @@ differs). It patches the official firmware and adds features to it. Everything s
 `BLUEEURO.BIN` (1,113,628 bytes, SHA-256 `fcb04565e2fd5bc15c0b2d0dc913dc99dc74732611e8cef0d7e8e4bb4af7402b`).
 The patcher only accepts that exact file, so it won't work on other versions.
 
-The CPU meter, reverb and delay additions run on a real unit; the compressor meter and Saturate are tested in an
-emulator so far. Keep your stock firmware file so you can go back at any
+The CPU meter, reverb and delay additions run on a real unit; the compressor meter, Saturate and USB Out are tested in
+an emulator so far. Keep your stock firmware file so you can go back at any
 time.
 
 ## What it adds
@@ -56,6 +56,12 @@ time.
   The level is compensated as it goes up: peaks top out at -14 dBFS, so a full mix gets quieter rather than louder
   (quiet material still comes up some, as with any saturation). It's saved with the project like the other settings.
   Source: [`src/mst_m7.c`](src/mst_m7.c).
+- **USB Out setting:** **USB Out** in the settings, under Phones Src: **Multichannel** (stock, all 18 channels to the
+  computer) or **Master only** (2 channels, the master L/R, just what the main outs play, so the saturator and
+  compressor are in it). Changing it makes the computer see the bluebox unplug and plug back in as a different
+  2-channel or 18-channel device, which takes about a second; audio to the computer stops while it does. USB audio
+  from the computer and MIDI work the same in both modes. It's saved with the project; with Master only saved, the
+  bluebox starts as 18 channels and switches about a second after boot. Source: [`src/usb_m7.c`](src/usb_m7.c).
 
 The panels, two columns per encoder page:
 
@@ -87,11 +93,11 @@ rename it to `BLUEEURO.BIN`. Then copy it to the microSD card as in step 3 below
 
 **Or with Python 3** (built into macOS; on Windows get it from python.org):
 
-1. Download [`releases/bluebox-mod-v0.14-patcher.py`](https://github.com/lexnels/bluelex-bluebox-euro/raw/main/releases/bluebox-mod-v0.14-patcher.py)
+1. Download [`releases/bluebox-mod-v0.15-patcher.py`](https://github.com/lexnels/bluelex-bluebox-euro/raw/main/releases/bluebox-mod-v0.15-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.14-patcher.py "path/to/stock/BLUEEURO.BIN"
+   python3 bluebox-mod-v0.15-patcher.py "path/to/stock/BLUEEURO.BIN"
    ```
    It checks that the file is the right stock firmware, then writes the modded `BLUEEURO.BIN` into a `modded` folder
    next to the patcher, so your stock file is never overwritten.
@@ -198,6 +204,26 @@ and makeup `+0xfc`, all log2 units; off when byte `+0x28` is set), saturates the
   param set after its last entry (`bl` at `0x08120b90` -> `mst_set_add`), and appended to the settings page's id list
   (`0x0814d966`).
 
+## USB Out in detail
+
+The USB device (ST USBD, UAC2, high speed, OTG_HS on the M7, no DMA) sends the computer 18 channels: the audio loop
+packs each 32-frame block as 54-byte frames (18 x 24 bit; channels 13/14, bytes 36..41, are the master L/R) and writes
+it to the IN ring (`bl` at `0x0804115a`), and the class DataIn (`FUN_08065db0`) sends 6 +-1 frames a microframe from it.
+Master only (`src/usb_m7.c`, cave at `0x08090000`):
+
+- The config descriptor is read from RAM (`0x240000a8`, 326 bytes), so it's edited in place: input terminal 4 and
+  interface 2's AS general descriptor say 2 channels (front L/R), EP `0x82` a 48-byte max packet. Nothing else changes.
+  The current mode is the descriptor itself, so a reset always starts as stock.
+- `usb_push` keeps bytes 36..41 of each frame before the ring write; `usb_datain` (class slot `0x08076c40`) is the
+  stock DataIn with 6-byte frames; class Init (`0x08076c2c`) sets the ring to 0x480 bytes (4 ms, as stock); the three
+  fixed 324-byte sends (`0x08065ab4`, `0x08065d1a`, `0x08066640`) send 36 bytes. About 1600 instructions per block.
+- The serial number gets an "M" (descriptor callback `0x08076c88`) so the computer doesn't mix up the two devices.
+- Switching: the setting (id `0x59`, key `usbout`, defined in `src/dly_m4.c`, added to the global set and to the settings
+  page's id list at `0x0814d91e`) reaches the compressor's queue and `mst_process` stores it (`0x38800f80`,
+  `src/usb_shared.h`). `usb_tick` replaces the stock host-loss watchdog call (`bl` at `0x08041166`): when the setting
+  differs from the descriptor it soft-disconnects (OTG `DCTL.SDIS`), edits the descriptor 20 ms later and reconnects
+  at 250 ms, resetting the watchdog's state, which sits out meanwhile. Before USB has started it just edits.
+
 ## Build
 
 Needs `arm-none-eabi-gcc` and Python 3. Put your stock 1.5.1 image at `firmware/BLUEEURO-3.bin` (the name the scripts expect)
@@ -207,14 +233,15 @@ Needs `arm-none-eabi-gcc` and Python 3. Put your stock 1.5.1 image at `firmware/
 ./build.sh
 python3 patch.py cpu          # -> out/cpu/BLUEEURO.BIN
 python3 patch.py cpu hall     # -> out/cpu+hall/BLUEEURO.BIN (patchsets combine)
-python3 patch.py cpu hall delay master   # -> out/cpu+hall+delay+master/BLUEEURO.BIN (the full mod; delay needs hall, master needs cpu and delay)
+python3 patch.py cpu hall delay master usb   # -> out/cpu+hall+delay+master+usb/BLUEEURO.BIN (the full mod; delay needs hall, master needs cpu and delay, usb needs master)
 python3 test_cpu.py           # runs both hooks under Unicorn (pip install unicorn capstone)
 python3 test_hall.py          # hall hooks under Unicorn: style switching, bypass, memory hand-over, cost
 cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on the host: decay times, stereo, freeze
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
-python3 tools/make_patcher.py cpu+hall+delay+master v0.14   # -> out/release/bluebox-mod-v0.14-patcher.py (copy it to releases/)
+python3 test_usb.py           # USB Out: setting, switch and re-enumeration, 2-ch descriptor, ring and DataIn under Unicorn
+python3 tools/make_patcher.py cpu+hall+delay+master+usb v0.15   # -> out/release/bluebox-mod-v0.15-patcher.py (copy it to releases/)
 python3 tools/make_web.py     # -> docs/index.html, the browser patcher (GitHub Pages, from main /docs), from the patcher in releases/
 ```
 

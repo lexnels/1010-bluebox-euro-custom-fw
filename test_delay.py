@@ -70,9 +70,11 @@ def m4_def(uc, a, size, _):
     defs.append((uc.reg_read(UC_ARM_REG_R1), uc.reg_read(UC_ARM_REG_R2), cs(uc.reg_read(UC_ARM_REG_R3)), mn, mx, cs(key)))
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 h = uc.hook_add(UC_HOOK_CODE, m4_def, begin=0x08135E08, end=0x08135E08)
+h2 = uc.hook_add(UC_HOOK_CODE, lambda uc, a, s, _: uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR)),
+                 begin=0x08135DB4, end=0x08135DB4)    # list definitions (USB Out, tested in test_usb.py)
 STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 call(s4["dly_defs"], 0x24032000, 0x117, 5, STR, stack=(-7, 9, STR + 8))
-uc.hook_del(h)
+uc.hook_del(h); uc.hook_del(h2)
 check(defs == [(0x117, 5, "Lbl:", -7, 9, "key"), (0x3A, 8, "Drift:", 0, 1000, "dlyflutter"), (0x3D, 8, "Send:", 0, 1000, "dlysend"),
                (0x4A, 1, "Pitch:", -12, 12, "dlypitch"), (0x4B, 4, "Pitch:", 0, 1, "dlypitchon"),
                (0x43, 8, "Saturate:", 0, 1000, "mstdrive")],

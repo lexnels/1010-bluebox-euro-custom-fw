@@ -4,13 +4,18 @@
  *
  * The table (FUN_08135e34) is an array indexed by id with a slot for every id below 0x20b; each definition is a call
  * FUN_08135e08(table, id, type, label, min, max, key). dly_defs replaces the last one (bl @0x0813714a, id 0x117) and
- * adds ours after it. Ids 0x3a, 0x3d, 0x4a, 0x4b, 0x43 are undefined in both cores' tables and used nowhere else.
+ * adds ours after it. Ids 0x3a, 0x3d, 0x4a, 0x4b, 0x43, 0x59 are undefined in both cores' tables and used nowhere else.
  */
 typedef void (*def_fn)(void *table, unsigned id, unsigned type, const char *label, int min, int max, const char *key);
 #define fw_def ((def_fn)0x08135e09)
 #define KNOB 8                      /* the type of the stock 0..1000 delay knobs (Delay, Feedback, Cutoff, Width) */
 #define INT 1                       /* a plain whole number (stock: Channel 1..16, BPM): semitones */
 #define TOGGLE 4                    /* the type of the stock buttons (Beat Sync, Filt, Ping, Quad) */
+
+/* A list param (type 5, like the compressor's Mode): FUN_08135db4(table, id, label, names, count, key). */
+typedef void (*def_list_fn)(void *table, unsigned id, const char *label, const char *const *names, int count, const char *key);
+#define fw_def_list ((def_list_fn)0x08135db5)
+static const char *const usb_out_names[2] = { "Multichannel", "Master only" };
 
 void dly_defs(void *table, unsigned id, unsigned type, const char *label, int min, int max, const char *key)
 {
@@ -20,6 +25,7 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, 0x4a, INT, "Pitch:", -12, 12, "dlypitch");
     fw_def(table, 0x4b, TOGGLE, "Pitch:", 0, 1, "dlypitchon");
     fw_def(table, 0x43, KNOB, "Saturate:", 0, 1000, "mstdrive");     /* master saturator (patches/master.py) */
+    fw_def_list(table, 0x59, "USB Out:", usb_out_names, 2, "usbout"); /* USB audio out mode (patches/usb.py) */
 }
 
 /* Master saturator Drive (0x43) in the global set (FUN_0812060c case 2), so edits are kept, saved with the project and
@@ -31,6 +37,7 @@ void mst_set_add(void *set, unsigned id, int value)
 {
     fw_add(set, id, value);
     fw_add(set, 0x43, 0);
+    fw_add(set, 0x59, 0);           /* USB Out: Multichannel */
 }
 
 /*
