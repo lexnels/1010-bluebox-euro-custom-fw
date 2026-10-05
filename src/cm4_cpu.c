@@ -11,7 +11,8 @@
  * The peak shows as one white row. No data from the M7 yet: nothing is drawn.
  *
  * On the settings page, with the master compressor on, the Thresh row gets a blue bar along its bottom edge showing
- * the compressor's gain reduction (src/mst_m7.c publishes it): 0 to 20 dB across the row, ticks every 5 dB.
+ * the compressor's gain reduction (src/mst_m7.c publishes it): 0 to 40 dB across the row on a square-root scale (so
+ * 1-3 dB still shows; 10 dB is half way), ticks at 5, 10 and 20 dB.
  * The UI only redraws when something on screen changes, so comp_tick asks for a redraw while the bar would move.
  */
 #include "cpu_shared.h"
@@ -60,7 +61,15 @@ static int comp_page(void)
 /* The settings list (page + 0x9c8, FUN_081400e2 lays it out): rect at +4 {x, y, w, h}, rows of 0x330 bytes from +0xe8,
  * row count at +0x99e8. Each row: rect at +4 (y-up, 28 px high, 30 px pitch), hidden byte +0x30, param id at +0x32c.
  * Its label sits 4 px above the row's bottom edge, so the bottom 3 px are free for the bar. */
-#define GR_FULL 200         /* 0.1 dB at full width */
+#define GR_FULL 400         /* 0.1 dB at full width */
+static int isqrt(int v)
+{
+    int r = 0;
+    for (int b = 1 << 30; b; b >>= 2)
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1;
+    return r;
+}
+static int gr_x(int gr, int rw) { return isqrt(gr * rw * rw / GR_FULL); }   /* x = rw sqrt(gr / GR_FULL) */
 static void comp_draw(uint8_t *px, unsigned w, unsigned fmt, unsigned bpp)
 {
     volatile struct mst_meter *m = MST_METER;
@@ -82,11 +91,11 @@ static void comp_draw(uint8_t *px, unsigned w, unsigned fmt, unsigned bpp)
             return;
         int gr = m->gr;
         if (gr > GR_FULL) gr = GR_FULL;
-        int fill = gr * rw / GR_FULL;
+        int fill = gr_x(gr, rw), t5 = gr_x(50, rw), t10 = gr_x(100, rw), t20 = gr_x(200, rw);
         for (int r = 0; r < 3; r++) {
             uint8_t *p = px + ((unsigned)(239 - y - r) * w + (unsigned)x0) * bpp;
             for (int x = 0; x < rw; x++, p += bpp) {
-                int tick = x > 0 && (x * 4) % rw < 4;              /* every 5 dB */
+                int tick = x == t5 || x == t10 || x == t20;
                 put(p, fmt, x < fill ? rgb(40, 150, 255) : tick ? rgb(80, 100, 150) : rgb(20, 32, 64));
             }
         }

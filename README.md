@@ -43,8 +43,9 @@ time.
   the column on the right.
   Source: [`src/dly_m7.h`](src/dly_m7.h) (audio), [`src/dly_m4.c`](src/dly_m4.c) (new params).
 - **Compressor meter:** in the settings list, with the master compressor on, the **Thresh** row gets a blue bar along
-  its bottom edge showing how much the compressor is turning the master down: 0 to 20 dB across the row, with ticks
-  every 5 dB, updating about 15 times a second. Dark when nothing is being compressed.
+  its bottom edge showing how much the compressor is turning the master down, updating about 15 times a second. The
+  scale is stretched at the low end so light compression shows clearly: 2 dB fills a fifth of the row, 10 dB half,
+  40 dB all of it, with ticks at 5, 10 and 20 dB. Dark when nothing is being compressed.
 - **Master saturator:** a **Saturate** control at the bottom of the settings page (after the compressor's). Saturation
   on the master bus after the compressor, before the master level, so it's in recordings too. At 0 it's off and the
   sound is untouched; low settings round off peaks, and higher ones push up to 36 dB into the clipper for overdrive.
@@ -75,11 +76,11 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 3** from 1010music (the mod can't include
 it), and Python 3 (built into macOS; on Windows get it from python.org).
 
-1. Download [`releases/bluebox-mod-v0.12-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.12-patcher.py)
+1. Download [`releases/bluebox-mod-v0.13-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.13-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
-   python3 bluebox-mod-v0.12-patcher.py "path/to/BLUEEURO 3.BIN"
+   python3 bluebox-mod-v0.13-patcher.py "path/to/BLUEEURO 3.BIN"
    ```
    It checks that the file is the right stock firmware, then writes `BLUEEURO.BIN` next to the patcher.
 3. Copy `BLUEEURO.BIN` to the root of the microSD card and install it the way you'd install a 1010music update.
@@ -200,7 +201,7 @@ cc -O2 -o out/hall_host tests/hall_host.c -lm && out/hall_host   # hall DSP on t
 cc -O2 -o out/rev_host tests/rev_host.c -lm && out/rev_host      # MVerb, Squall, Freeverb on the host
 python3 test_delay.py         # delay hooks on the real stock delay under Unicorn: panel layout, echoes, pitch, drift, send, cost
 python3 test_master.py        # compressor meter, saturator and settings row under Unicorn
-python3 tools/make_patcher.py cpu+hall+delay+master v0.12   # -> out/release/bluebox-mod-v0.12-patcher.py (copy it to releases/)
+python3 tools/make_patcher.py cpu+hall+delay+master v0.13   # -> out/release/bluebox-mod-v0.13-patcher.py (copy it to releases/)
 ```
 
 Never commit firmware images: `*.bin` / `*.BIN` are git-ignored.
