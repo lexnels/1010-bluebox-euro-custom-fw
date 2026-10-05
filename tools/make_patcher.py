@@ -29,7 +29,7 @@ payload = base64.b64encode(zlib.compress(blob, 9)).decode()
 lines = "\n".join(payload[k:k + 100] for k in range(0, len(payload), 100))
 
 script = f'''#!/usr/bin/env python3
-"""BlueLex - 1010 Bluebox Euro modded firmware {version} ({build}): https://github.com/lexnels/1010-bluebox-euro-custom-fw
+"""BlueLex - 1010 Bluebox Euro modded firmware {version} ({build}): https://github.com/lexnels/bluelex-bluebox-euro
 
 Turns the stock 1010music firmware file into the modded one. Needs Python 3, nothing else.
 

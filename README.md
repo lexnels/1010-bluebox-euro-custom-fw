@@ -80,14 +80,14 @@ Good to know:
 You need your own copy of the official bluebox eurorack firmware **version 1.5.1** from 1010music (the mod can't include
 it).
 
-**In your browser (easiest):** open the [web patcher](https://lexnels.github.io/1010-bluebox-euro-custom-fw/), choose
+**In your browser (easiest):** open the [web patcher](https://lexnels.github.io/bluelex-bluebox-euro/), choose
 your stock 1.5.1 `BLUEEURO.BIN`, and save the modded `BLUEEURO.BIN` it gives you. The file never leaves your computer: the page
 patches it locally. If your browser saves it as `BLUEEURO (1).BIN` because the stock file is in the same folder,
 rename it to `BLUEEURO.BIN`. Then copy it to the microSD card as in step 3 below.
 
 **Or with Python 3** (built into macOS; on Windows get it from python.org):
 
-1. Download [`releases/bluebox-mod-v0.14-patcher.py`](https://github.com/lexnels/1010-bluebox-euro-custom-fw/raw/main/releases/bluebox-mod-v0.14-patcher.py)
+1. Download [`releases/bluebox-mod-v0.14-patcher.py`](https://github.com/lexnels/bluelex-bluebox-euro/raw/main/releases/bluebox-mod-v0.14-patcher.py)
    (the newest patcher in the [`releases`](releases) folder).
 2. In a terminal, run it on your stock firmware file:
    ```
