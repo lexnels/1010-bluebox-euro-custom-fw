@@ -1,11 +1,17 @@
 # bluebox eurorack custom firmware
 
+> [!WARNING]
+> **Install at your own risk.** This is unofficial custom firmware, not made or supported by 1010music. It hasn't
+> damaged a device so far, but any custom firmware carries some risk of bricking your module, losing settings or
+> projects, or behaving unexpectedly, and installing it may affect your warranty. The authors accept no
+> responsibility for any damage. Keep your stock firmware file and back up your SD card before installing.
+
 Unofficial firmware mod for the 1010music **bluebox eurorack edition** (not the desktop bluebox; their firmware
 differs). It patches the official firmware, version 3, and adds features to it. Everything stock still works.
 
 The CPU meter and the new reverb styles run on a real unit; the reverb's Size knob, Freeze position and knob memory
-and the delay additions are tested in an emulator so far. **Use at your own risk.** This isn't made or supported by 1010music. Keep your stock firmware
-file so you can go back at any time.
+and the delay additions are tested in an emulator so far. Keep your stock firmware file so you can go back at any
+time.
 
 ## What it adds
 
