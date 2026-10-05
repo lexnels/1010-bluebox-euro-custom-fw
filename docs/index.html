@@ -36,6 +36,10 @@
   #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
   #save { display: none; margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 10px;
           background: var(--accent); color: var(--accent-text); font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .adds { margin: 0 0 24px; }
+  .adds h2 { font-size: 1.05rem; margin: 0 0 6px; }
+  .adds ul { margin: 0 0 8px; padding-left: 1.2em; }
+  .adds p { margin: 0; }
   .small { color: var(--muted); font-size: 0.85rem; margin-top: 24px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; overflow-wrap: anywhere; }
   a { color: var(--accent); }
@@ -44,8 +48,21 @@
 <body>
 <main>
   <h1>BlueLex - 1010 Bluebox Euro modded firmware</h1>
-  <p class="sub">Custom firmware v0.14 for the 1010music bluebox eurorack edition, patched in your browser.
-    <a href="https://github.com/lexnels/bluelex-bluebox-euro">What it adds</a></p>
+  <p class="sub">Custom firmware v0.14 for the 1010music bluebox eurorack edition, patched in your browser.</p>
+
+  <section class="adds">
+    <h2>What it adds</h2>
+    <ul>
+      <li><strong>Four new reverbs:</strong> FDN Hall, MVerb, Squall and Freeverb, plus Diffusion, Spread and Size knobs,
+        and each reverb style remembers its settings.</li>
+      <li><strong>Delay:</strong> Pitch (each repeat shifted up or down, tape style), Drift (wandering tape wobble) and
+        Send into the reverb.</li>
+      <li><strong>Master:</strong> a Saturate control, from gentle warmth to overdrive, and a compression meter in the
+        settings.</li>
+      <li><strong>CPU meter</strong> next to the clock.</li>
+    </ul>
+    <p><a href="https://github.com/lexnels/bluelex-bluebox-euro#readme">Full documentation</a></p>
+  </section>
 
   <div class="warn"><strong>Install at your own risk.</strong> This is unofficial firmware, not made or supported by
     1010music. Any custom firmware carries some risk of bricking your module or losing projects. Keep your stock
