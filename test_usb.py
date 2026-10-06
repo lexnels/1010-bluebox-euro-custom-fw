@@ -85,7 +85,7 @@ uc.hook_add(UC_HOOK_CODE, m4_def, begin=0x08135E08, end=0x08135E08)
 uc.hook_add(UC_HOOK_CODE, m4_list, begin=0x08135DB4, end=0x08135DB4)
 STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 call(uc, d4["dly_defs"], 0x24032000, 0x117, 5, STR, stack=(-7, 9, STR + 8))
-check(lists == [(0x59, "USB Out:", ["Multichannel", "Master only"], "usbout")], f"M4: USB Out defined as a list: {lists}")
+check(lists[:1] == [(0x59, "USB Out:", ["Multichannel", "Master only"], "usbout")], f"M4: USB Out defined as a list: {lists}")
 added = []
 stub(uc, 0x081205E2, added)
 call(uc, d4["mst_set_add"], 0x24033000, 0x162, 0)

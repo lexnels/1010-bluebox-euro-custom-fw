@@ -4,7 +4,7 @@
  * them, and the stock reverb setter ignores ids outside 0x13d..0x15c. */
 #define SFX_CHO_ON    0x44
 #define SFX_CHO_FX1   0x45          /* how much of its output goes into FX1 (the delay) */
-#define SFX_CHO_MODE  0x46          /* 1 = I, 2 = II, 3 = I+II */
+#define SFX_CHO_MODE  0x46          /* a list: 0 = I, 1 = II, 2 = I+II */
 #define SFX_CHO_LEVEL 0x47
 #define SFX_DRV_ON    0x48
 #define SFX_DRV_FX1   0x49
@@ -21,3 +21,7 @@
 #define SFX_CHO_FX2   0x56          /* how much of its output goes into FX2 (the reverb) */
 #define SFX_DRV_FX2   0x57
 #define SFX_D2_FX2    0x58
+#define SFX_CHO_RATE  0x5a          /* 500 = the mode's own LFO rate; x0.25 .. x4 */
+#define SFX_CHO_DEPTH 0x5b          /* 500 = the mode's own depth; 0 .. x2 */
+#define SFX_D2_BEAT   0x5c          /* Beat Sync: Time follows the tempo (SFX_D2_SYNC) */
+#define SFX_D2_SYNC   0x5d          /* the stock delay's 12 note values (1/64 .. 1 bar), its names list too */

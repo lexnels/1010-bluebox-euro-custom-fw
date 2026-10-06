@@ -11,7 +11,7 @@
  * Params (src/sfx_ids.h) come with the reverb slot's messages; the M7 copies every message to the master queue (0xc),
  * which we read like src/mst_m7.c does. An FX that is off costs nothing.
  *
- * Memory: about 1 MB (delay 2 lines of 2^17 samples, 2.7 s, per side) from the firmware's SDRAM allocator
+ * Memory: about 2 MB (delay 2 lines of 2^18 samples, 5.4 s, per side) from the firmware's SDRAM allocator
  * FUN_080413d0, taken while the graph is built (the delay's constructor call @0x080518d2 is ours), so the pointer,
  * kept in backup SRAM, is fresh on every boot.
  */
@@ -43,7 +43,7 @@ struct bus { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo; };
 #define FS 48000.f
 #define MAXN 32u
 #define CHO_N 1024u                 /* 21 ms */
-#define D2_N 131072u                /* 2.73 s */
+#define D2_N 262144u                /* 5.46 s: a bar at 45 BPM */
 #define D2_CLEAR 4096u              /* samples per side cleared per block after switching on */
 #define TWO_PI 6.2831853f
 
@@ -51,9 +51,10 @@ struct sfx {
     uint32_t magic;
     struct sfx *self;
     /* params, as the M4 sends them */
-    int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level;
+    int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level, cho_rate, cho_depth;
     int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
-    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level;
+    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync;
+    float bpm;                                                  /* the tempo d2_tgt was worked out for */
     /* chorus */
     float cho_ph, cho_inc, cho_ctr, cho_dep;                    /* LFO phase 0..1, per sample; delay in samples */
     float cho_pre, cho_postl, cho_postr, cho_g, cho_gt;
@@ -113,9 +114,11 @@ static float warm(float x)
 
 static void defaults(struct sfx *s)
 {
-    s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 1; s->cho_level = 1000;
+    s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 0; s->cho_level = 1000; s->cho_rate = 500; s->cho_depth = 500;
     s->drv_on = 0; s->drv_fx1 = 0; s->drv_fx2 = 0; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
     s->d2_on = 0; s->d2_fx1 = 0; s->d2_fx2 = 0; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
+    s->d2_beat = 0; s->d2_sync = 8;
+    s->bpm = 120.f;
 }
 
 /* derived values for the current params */
@@ -124,10 +127,12 @@ static void update(struct sfx *s)
     static const float rate[3] = { 0.513f, 0.863f, 9.75f };      /* Juno-60: I, II, I+II */
     static const float ctr[3] = { 3.505f, 3.505f, 3.5f };        /* ms: I and II sweep 1.66..5.35 ms */
     static const float dep[3] = { 1.845f, 1.845f, 0.2f };
-    int m = s->cho_mode < 1 ? 0 : s->cho_mode > 3 ? 2 : s->cho_mode - 1;
-    s->cho_inc = rate[m] / FS;
-    s->cho_ctr = ctr[m] * FS * 0.001f;
-    s->cho_dep = dep[m] * FS * 0.001f;
+    int m = s->cho_mode < 0 ? 0 : s->cho_mode > 2 ? 2 : s->cho_mode;
+    s->cho_inc = rate[m] * exp2f_((s->cho_rate - 500) * 0.004f) / FS;  /* Rate: x0.25 .. x4 */
+    float dp = dep[m] * s->cho_depth * 0.002f;                         /* Depth: 0 .. x2 */
+    float c = ctr[m] > dp + 0.3f ? ctr[m] : dp + 0.3f;                 /* never closer than 0.3 ms */
+    s->cho_ctr = c * FS * 0.001f;
+    s->cho_dep = dp * FS * 0.001f;
     s->cho_gt = s->cho_on ? 1.f : 0.f;
 
     float d = s->drv_drive * 0.001f;
@@ -137,7 +142,12 @@ static void update(struct sfx *s)
     s->drv_lp = lp_coef(500.f * exp2f_(5.3f * s->drv_tone * 0.001f));   /* 500 Hz .. 20 kHz */
     s->drv_gt = s->drv_on ? 1.f : 0.f;
 
-    s->d2_tgt = 10.f * exp2f_(7.643856f * s->d2_time * 0.001f) * FS * 0.001f;  /* 10 ms * 200^t */
+    static const uint16_t ticks[12] = { 60, 120, 240, 320, 360, 480, 639, 720, 960, 1280, 1920, 3840 };
+    if (s->d2_beat) {               /* the stock delay's note values, in its ticks (960 a beat; its 1/4T is 639) */
+        int k = s->d2_sync < 0 ? 0 : s->d2_sync > 11 ? 11 : s->d2_sync;
+        s->d2_tgt = ticks[k] * (60.f / 960.f) * FS / s->bpm;
+    } else
+        s->d2_tgt = 10.f * exp2f_(7.643856f * s->d2_time * 0.001f) * FS * 0.001f;  /* 10 ms * 200^t */
     if (s->d2_tgt > (float)(D2_N - 4)) s->d2_tgt = (float)(D2_N - 4);
     s->d2_fbg = s->d2_fb * 0.00098f;                                  /* up to 0.98 */
     s->d2_lp = lp_coef(800.f * exp2f_(4.5f * s->d2_tone * 0.001f));   /* 800 Hz .. 18 kHz in the loop */
@@ -175,6 +185,8 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     case SFX_CHO_FX2: s->cho_fx2 = v; break;
     case SFX_CHO_MODE: s->cho_mode = v; break;
     case SFX_CHO_LEVEL: s->cho_level = v; break;
+    case SFX_CHO_RATE: s->cho_rate = v; break;
+    case SFX_CHO_DEPTH: s->cho_depth = v; break;
     case SFX_DRV_ON: s->drv_on = v; break;
     case SFX_DRV_FX1: s->drv_fx1 = v; break;
     case SFX_DRV_FX2: s->drv_fx2 = v; break;
@@ -193,6 +205,8 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     case SFX_D2_TONE: s->d2_tone = v; break;
     case SFX_D2_PING: s->d2_ping = v; break;
     case SFX_D2_LEVEL: s->d2_level = v; break;
+    case SFX_D2_BEAT: s->d2_beat = v; break;
+    case SFX_D2_SYNC: s->d2_sync = v; break;
     default: return 0;
     }
     return 1;
@@ -333,6 +347,11 @@ unsigned sfx_process(void *obj, void *ctx)
     for (unsigned i = 0; fw_next_ev(q, i, &ev); i++)
         if (ev.type == 0x39)
             changed |= set(s, ev.id, ev.value);
+    if (s->d2_beat) {               /* the song tempo, as the stock delay reads it (FUN_08053234: ctx[0] + 0x18) */
+        float bpm = *(volatile float *)(*(uint8_t **)ctx + 0x18);
+        if (!(bpm >= 20.f && bpm <= 400.f)) bpm = 120.f;
+        if (bpm != s->bpm) { s->bpm = bpm; changed = 1; }
+    }
     if (changed)
         update(s);
     int cho = s->cho_on || s->cho_g > 1e-4f, drv = s->drv_on || s->drv_g > 1e-4f, d2 = s->d2_on || s->d2_g > 1e-4f;

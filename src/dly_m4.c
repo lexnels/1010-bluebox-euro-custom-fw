@@ -16,6 +16,8 @@ typedef void (*def_fn)(void *table, unsigned id, unsigned type, const char *labe
 typedef void (*def_list_fn)(void *table, unsigned id, const char *label, const char *const *names, int count, const char *key);
 #define fw_def_list ((def_list_fn)0x08135db5)
 static const char *const usb_out_names[2] = { "Multichannel", "Master only" };
+static const char *const cho_mode_names[3] = { "I", "II", "I+II" };
+#define SYNC_NAMES ((const char *const *)0x0814ea24)    /* the stock delay's 0x34 list: 1/64 .. 1 bar (12) */
 #include "sfx_ids.h"
 static void sfx_reset(void);
 
@@ -32,7 +34,9 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, SFX_CHO_ON, TOGGLE, "On:", 0, 1, "chorus_on");
     fw_def(table, SFX_CHO_FX1, KNOB, "FX1 Send:", 0, 1000, "chorus_fx1");
     fw_def(table, SFX_CHO_FX2, KNOB, "FX2 Send:", 0, 1000, "chorus_fx2");
-    fw_def(table, SFX_CHO_MODE, INT, "Mode:", 1, 3, "chorus_mode");
+    fw_def_list(table, SFX_CHO_MODE, "Mode:", cho_mode_names, 3, "chorus_mode");
+    fw_def(table, SFX_CHO_RATE, KNOB, "Rate:", 0, 1000, "chorus_rate");
+    fw_def(table, SFX_CHO_DEPTH, KNOB, "Depth:", 0, 1000, "chorus_depth");
     fw_def(table, SFX_CHO_LEVEL, KNOB, "Level:", 0, 1000, "chorus_level");
     fw_def(table, SFX_DRV_ON, TOGGLE, "On:", 0, 1, "drive_on");
     fw_def(table, SFX_DRV_FX1, KNOB, "FX1 Send:", 0, 1000, "drive_fx1");
@@ -48,6 +52,8 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, SFX_D2_TONE, KNOB, "Tone:", 0, 1000, "delay2_tone");
     fw_def(table, SFX_D2_PING, TOGGLE, "Ping:", 0, 1, "delay2_ping");
     fw_def(table, SFX_D2_LEVEL, KNOB, "Level:", 0, 1000, "delay2_level");
+    fw_def(table, SFX_D2_BEAT, TOGGLE, "Beat Sync:", 0, 1, "delay2_beat");
+    fw_def_list(table, SFX_D2_SYNC, "Time:", SYNC_NAMES, 12, "delay2_sync");
     sfx_reset();                    /* at boot the FX button starts from the reverb itself */
 }
 
@@ -153,16 +159,17 @@ static void sfx_reset(void) { su_write(0); }
 
 /* the panel order: knobs fill columns of 2, encoders take 4 at a time */
 static const int16_t SFX_IDS[] = {
-    SFX_CHO_MODE, 1, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0, SFX_CHO_ON, 0,
+    SFX_CHO_MODE, 0, SFX_CHO_RATE, 500, SFX_CHO_DEPTH, 500, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0,
+    SFX_CHO_ON, 0,
     SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_LEVEL, 500, SFX_DRV_ON, 0, SFX_DRV_FX1, 0, SFX_DRV_FX2, 0,
-    SFX_D2_TIME, 700, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_FX1, 0, SFX_D2_FX2, 0,
-    SFX_D2_PING, 0, SFX_D2_ON, 0,
+    SFX_D2_TIME, 700, SFX_D2_SYNC, 8, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_FX1, 0, SFX_D2_FX2, 0,
+    SFX_D2_PING, 0, SFX_D2_BEAT, 0, SFX_D2_ON, 0,
 };
 static int sfx_of(unsigned id)      /* which FX an id belongs to, 0 for none */
 {
-    if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2) return 1;
+    if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2 || id == SFX_CHO_RATE || id == SFX_CHO_DEPTH) return 1;
     if (id == SFX_DRV_ON || id == SFX_DRV_FX1 || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL) || id == SFX_DRV_FX2) return 2;
-    if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2) return 3;
+    if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2 || id == SFX_D2_BEAT || id == SFX_D2_SYNC) return 3;
     return 0;
 }
 
@@ -192,9 +199,13 @@ int sfx_list(void *app, uint16_t *slot, uint32_t *out)
         return ret;
     int mode = (int)su_mode();
     uint32_t n = out[0], k = 0;     /* entries of 12 bytes from out + 4: u16 id, ..., value at +8 */
+    unsigned hide = SFX_D2_SYNC;    /* Delay 2 shows Time, or with Beat Sync on the note value, in its place */
+    for (uint32_t i = 0; i < n; i++)
+        if (*(uint16_t *)(out + 1 + 3 * i) == SFX_D2_BEAT && out[1 + 3 * i + 2])
+            hide = SFX_D2_TIME;
     for (uint32_t i = 0; i < n; i++) {
         unsigned id = *(uint16_t *)(out + 1 + 3 * i);
-        if (sfx_of(id) != mode)
+        if (sfx_of(id) != mode || id == hide)
             continue;
         if (k != i)
             for (int w = 0; w < 3; w++)

@@ -90,7 +90,7 @@ p = u32(uc, 0x38800FA4)
 size = u32(uc, HEAP) - p
 print(f"     state {size} bytes at {p:#x}")
 check(r == 0x24050000 and p == 0xC0010000 and u32(uc, 0x38800FA0) == 0x58464453, "sfx_ctor: runs the delay's constructor, then allocates its state")
-check(0x100000 < size < 0x110000 and u32(uc, p) == 0x58464453 and u32(uc, p + 4) == p, "state about 1 MB, marked")
+check(0x200000 < size < 0x210000 and u32(uc, p) == 0x58464453 and u32(uc, p + 4) == p, "state about 2 MB, marked")
 check(bytes(uc.mem_read(p + size - 0x1010, 0x1000)) == bytes(0x1000), "state zeroed (delay lines)")
 call(uc, s7["sfx_ctor"], 0x24050000)
 check(u32(uc, 0x38800FA4) == p and u32(uc, HEAP) == p + size, "a rebuilt graph keeps the same memory")
@@ -165,9 +165,33 @@ dr = [peak_delay(r, k) for k in range(2400, T - 2400, 2400)]
 print(f"     chorus I delays L {min(dl):.2f}..{max(dl):.2f} ms, R {min(dr):.2f}..{max(dr):.2f} ms")
 check(1.5 < min(dl) and max(dl) < 5.6 and max(dl) - min(dl) > 2.5, "chorus I: delay sweeps about 1.7 to 5.3 ms (Juno-60)")
 uc, node = setup()
-l, r, _ = run(uc, node, clicks, clicks, [(ids["CHO_ON"], 1), (ids["CHO_MODE"], 3)])
+l, r, _ = run(uc, node, clicks, clicks, [(ids["CHO_ON"], 1), (ids["CHO_MODE"], 2)])
 d3 = [peak_delay(l, k) for k in range(2400, T - 2400, 2400)]
 check(3.0 < min(d3) and max(d3) < 4.0, f"chorus I+II: shallow and fast around 3.5 ms ({min(d3):.2f}..{max(d3):.2f})")
+uc, node = setup()
+l, r, _ = run(uc, node, clicks, clicks, [(ids["CHO_ON"], 1), (ids["CHO_DEPTH"], 0)])
+d0 = [peak_delay(l, k) for k in range(2400, T - 2400, 2400)]
+uc, node = setup()
+l, r, _ = run(uc, node, clicks, clicks, [(ids["CHO_ON"], 1), (ids["CHO_DEPTH"], 1000)])
+d2 = [peak_delay(l, k) for k in range(2400, T - 2400, 2400)]
+print(f"     chorus I, Depth 0: {min(d0):.2f}..{max(d0):.2f} ms; Depth 1000: {min(d2):.2f}..{max(d2):.2f} ms")
+check(max(d0) - min(d0) < 0.1 and max(d2) - min(d2) > 1.6 * (max(dl) - min(dl)) and min(d2) > 0.2, "chorus Depth: 0 = still, 1000 = about twice the sweep (never below 0.3 ms)")
+uc, node = setup()
+l, r, _ = run(uc, node, clicks, clicks, [(ids["CHO_ON"], 1), (ids["CHO_RATE"], 1000)])
+d4 = [peak_delay(l, k) for k in range(2400, T - 2400, 2400)]
+turns = sum(1 for i in range(1, len(d4) - 1) if (d4[i] - d4[i-1]) * (d4[i+1] - d4[i]) < 0)
+check(turns >= 2, f"chorus Rate 1000: the sweep turns around within a second ({turns} turns; at 500 it takes 2 s)")
+
+# delay 2 Beat Sync: the stock note values at the song tempo
+for bpm, k, ms in ((120.0, 8, 500.0), (90.0, 5, 1000.0 / 3)):
+    uc, node = setup()
+    ctx0 = u32(uc, CTX) or 0x24060000
+    w32(uc, CTX, ctx0); uc.mem_write(ctx0 + 0x18, struct.pack("<f", bpm))
+    imp0 = [0.0] * 48000; imp0[4800] = 1.0      # after the lines have cleared
+    l, r, _ = run(uc, node, imp0, imp0, [(ids["D2_ON"], 1), (ids["D2_BEAT"], 1), (ids["D2_SYNC"], k), (ids["D2_LEVEL"], 1000), (ids["D2_TONE"], 1000), (ids["D2_FB"], 0)])
+    pk = max(range(4800 + 1, 48000), key=lambda j: abs(l[j] - imp0[j]))
+    got = (pk - 4800) / 48.0
+    check(abs(got - ms) < 0.1, f"delay 2 Beat Sync at {bpm:.0f} BPM, note value {k}: echo after {got:.2f} ms (want {ms:.2f})")
 
 # drive: louder input gets compressed, level kept
 def drive_peak(dv, amp):
@@ -196,19 +220,19 @@ check(g3 > 0.2 * g1, "drive: distorted (strong 3rd harmonic) at full Drive")
 # delay 2: lines cleared on switching on (silent), then an echo at the set time
 uc, node = setup()
 imp = [0.0] * 48000
-imp[1600] = 1.0
-l, r, cost = run(uc, node, imp, imp, [(ids["D2_ON"], 1), (ids["D2_TIME"], 500), (ids["D2_FB"], 500), (ids["D2_LEVEL"], 1000), (ids["D2_TONE"], 1000)], skip=40)
+imp[2400] = 1.0
+l, r, cost = run(uc, node, imp, imp, [(ids["D2_ON"], 1), (ids["D2_TIME"], 500), (ids["D2_FB"], 500), (ids["D2_LEVEL"], 1000), (ids["D2_TONE"], 1000)], skip=80)
 want = 10 * 200 ** 0.5                 # 141.4 ms
-echoes = [i for i in range(1700, 48000) if abs(l[i]) > 0.1]
+echoes = [i for i in range(2500, 48000) if abs(l[i]) > 0.1]
 first = echoes[0] if echoes else None
-print(f"     delay 2 (Time 500 = {want:.1f} ms): first echo {(first - 1600) / 48 if first else None} ms after the click; {cost} instr/block")
-check(first and abs((first - 1600) / 48 - want) < 0.2, "delay 2: echo at 10 ms * 200^(Time/1000)")
+print(f"     delay 2 (Time 500 = {want:.1f} ms): first echo {(first - 2400) / 48 if first else None} ms after the click; {cost} instr/block")
+check(first and abs((first - 2400) / 48 - want) < 0.2, "delay 2: echo at 10 ms * 200^(Time/1000)")
 e2 = [i for i in echoes if i > first + 100]
 print(f"     2nd echo {(e2[0] - first) / 48 if e2 else None} ms later, {abs(l[e2[0]]) / abs(l[first]) if e2 else 0:.2f} of the first")
 check(e2 and abs((e2[0] - first) / 48 - want) < 0.2 and 0.2 < abs(l[e2[0]]) / abs(l[first]) < 0.5, "delay 2: repeats at the same spacing, about Feedback down (less the Tone filter)")
 uc, node = setup()
 l, r, _ = run(uc, node, imp, imp, [(ids["D2_ON"], 1), (ids["D2_TIME"], 500), (ids["D2_FB"], 800), (ids["D2_LEVEL"], 1000), (ids["D2_PING"], 1)])
-el = [i for i in range(1700, 48000) if abs(l[i]) > 0.05]; er = [i for i in range(1700, 48000) if abs(r[i]) > 0.05]
+el = [i for i in range(2500, 48000) if abs(l[i]) > 0.05]; er = [i for i in range(2500, 48000) if abs(r[i]) > 0.05]
 check(el and er and el[0] < er[0] and abs((er[0] - el[0]) / 48 - want) < 0.3, "delay 2 Ping: first repeat left, next one right")
 # cleared on switching on: put junk in the lines, switch off and on again
 uc, node = setup()
@@ -239,7 +263,7 @@ check(len(revs) > 0 and revs[-1][0] == node, "the reverb (hall_process) runs aft
 # all three: cost
 uc, node = setup()
 x = [0.3 * math.sin(2 * math.pi * 330 * i / 48000) for i in range(3200)]
-_, _, cost = run(uc, node, x, x, [(ids["CHO_ON"], 1), (ids["DRV_ON"], 1), (ids["D2_ON"], 1)], skip=40)
+_, _, cost = run(uc, node, x, x, [(ids["CHO_ON"], 1), (ids["DRV_ON"], 1), (ids["D2_ON"], 1)], skip=80)
 print(f"     all three on (after delay 2 has cleared its lines): {cost} instructions per 32-sample block (~{cost / 3200:.1f}% of the M7 at ~1 instr/cycle)")
 check(cost < 12000, "all three on: under 12000 instructions per block")
 # silent input: chorus and drive stop after their tails
@@ -259,7 +283,13 @@ def m4_def(uc, a, s, _):
     defs.append((uc.reg_read(UC_ARM_REG_R1), uc.reg_read(UC_ARM_REG_R2), cs(uc.reg_read(UC_ARM_REG_R3)), mn, mx, cs(key)))
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 uc.hook_add(UC_HOOK_CODE, m4_def, begin=0x08135E08, end=0x08135E08)
-stub(uc, 0x08135DB4)
+ldefs = []
+def m4_ldef(uc, a, s, _):
+    sp = uc.reg_read(UC_ARM_REG_SP)
+    cnt, key = struct.unpack("<iI", uc.mem_read(sp, 8))
+    ldefs.append((uc.reg_read(UC_ARM_REG_R1), cs(uc.reg_read(UC_ARM_REG_R2)), uc.reg_read(UC_ARM_REG_R3), cnt, cs(key)))
+    uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+uc.hook_add(UC_HOOK_CODE, m4_ldef, begin=0x08135DB4, end=0x08135DB4)
 STR = 0x24031000; uc.mem_write(STR, b"Lbl:\0\0\0\0key\0")
 sp = 0x2407F000
 uc.mem_write(sp, struct.pack("<iiI", -7, 9, STR + 8) + bytes(16))
@@ -268,9 +298,15 @@ uc.reg_write(UC_ARM_REG_SP, sp); uc.reg_write(UC_ARM_REG_LR, RET | 1)
 uc.emu_start(s4["dly_defs"] | 1, RET, count=1_000_000)
 ours = {d[0]: d for d in defs if d[0] in ids.values()}
 print("     " + ", ".join(f"{d[2]}{d[5]}" for d in ours.values()))
-check(len(ours) == 19 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["CHO_MODE"]][1:5] == (1, "Mode:", 1, 3),
-      "M4: the 19 send FX params defined (toggles, knobs, Mode 1..3)")
-check(len(set(d[5] for d in ours.values())) == 19, "M4: each with its own key")
+lists = {d[0]: d for d in ldefs if d[0] in ids.values()}
+print("     lists: " + ", ".join(f"{d[1]}{d[4]} x{d[3]}" for d in lists.values()))
+check(len(ours) == 21 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
+      "M4: the 21 send FX knobs and toggles defined")
+names = lambda p, n: [cs(u32(uc, p + 4 * i)) for i in range(n)]
+check(set(lists) == {ids["CHO_MODE"], ids["D2_SYNC"]} and lists[ids["CHO_MODE"]][3] == 3 and names(lists[ids["CHO_MODE"]][2], 3) == ["I", "II", "I+II"]
+      and lists[ids["D2_SYNC"]][3] == 12 and names(lists[ids["D2_SYNC"]][2], 12)[::4] == ["1/64", "1/16D", "1/4"],
+      "M4: Mode a list (I, II, I+II), Delay 2's synced Time the stock delay's 12 note values")
+check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 23, "M4: each with its own key")
 check(u32(uc, 0x38800FE4) == 0, "M4: boot leaves the FX button at the reverb")
 
 # the reverb set: hall's table, then ours, ending at the common tail with r4, r5 intact
@@ -284,8 +320,8 @@ uc.emu_start(0x08120C1C | 1, 0x0812088C, count=2000)
 uc.hook_del(h)
 check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) == 0x24030000 and uc.reg_read(UC_ARM_REG_R5) == 0x1234
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 reverb set: reaches the common tail with r4, r5, sp intact")
-check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 29
-      and {a[0] for a in added[10:]} == set(ids.values()), f"M4 reverb set: the reverb's 10, then the 19 send FX params ({len(added)})")
+check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 33
+      and {a[0] for a in added[10:]} == set(ids.values()), f"M4 reverb set: the reverb's 10, then the 23 send FX params ({len(added)})")
 
 # the panel list, filtered by mode
 OUT = 0x24034000
@@ -304,9 +340,13 @@ def lst(mode, slot=0x15):
 rv = lst(0)
 check([e[0] for e in rv] == [0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F], "panel, reverb: only the reverb's knobs")
 c = lst(1); d = lst(2); e = lst(3)
-check([x[0] for x in c] == [ids[k] for k in ("CHO_MODE", "CHO_LEVEL", "CHO_FX1", "CHO_FX2", "CHO_ON")] and c[1][4] == 1000, "panel, Chorus: Mode, Level, FX1 Send, FX2 Send, ON")
+check([x[0] for x in c] == [ids[k] for k in ("CHO_MODE", "CHO_RATE", "CHO_DEPTH", "CHO_LEVEL", "CHO_FX1", "CHO_FX2", "CHO_ON")] and c[3][4] == 1000, "panel, Chorus: Mode, Rate, Depth, Level, FX1 Send, FX2 Send, ON")
 check([x[0] for x in d] == [ids[k] for k in ("DRV_DRIVE", "DRV_TONE", "DRV_LEVEL", "DRV_ON", "DRV_FX1", "DRV_FX2")], "panel, Drive: Drive, Tone, Level, ON, FX1 Send, FX2 Send")
-check([x[0] for x in e] == [ids[k] for k in ("D2_TIME", "D2_FB", "D2_TONE", "D2_LEVEL", "D2_FX1", "D2_FX2", "D2_PING", "D2_ON")], "panel, Delay 2: Time, Feedback, Tone, Level, FX1 Send, FX2 Send, PING, ON")
+check([x[0] for x in e] == [ids[k] for k in ("D2_TIME", "D2_FB", "D2_TONE", "D2_LEVEL", "D2_FX1", "D2_FX2", "D2_PING", "D2_BEAT", "D2_ON")], "panel, Delay 2: Time, Feedback, Tone, Level, FX1 Send, FX2 Send, PING, BEAT, ON")
+i = [a[0] for a in added].index(ids["D2_BEAT"]); added[i] = (added[i][0], 1)
+e = lst(3); added[i] = (added[i][0], 0)
+check([x[0] for x in e][:2] == [ids["D2_SYNC"], ids["D2_FB"]] and ids["D2_TIME"] not in [x[0] for x in e] and e[0][4] == 8,
+      "panel, Delay 2 with Beat Sync on: the note value (1/4) in Time's place")
 check(len(lst(2, slot=0x14)) == len(added) - 1, "panel, delay slot: untouched")
 
 texts = []
