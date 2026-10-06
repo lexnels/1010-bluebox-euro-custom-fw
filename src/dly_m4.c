@@ -37,6 +37,7 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def_list(table, SFX_CHO_MODE, "Mode:", cho_mode_names, 3, "chorus_mode");
     fw_def(table, SFX_CHO_RATE, KNOB, "Rate:", 0, 1000, "chorus_rate");
     fw_def(table, SFX_CHO_DEPTH, KNOB, "Depth:", 0, 1000, "chorus_depth");
+    fw_def(table, SFX_CHO_WIDTH, KNOB, "Width:", 0, 1000, "chorus_width");
     fw_def(table, SFX_CHO_LEVEL, KNOB, "Level:", 0, 1000, "chorus_level");
     fw_def(table, SFX_DRV_ON, TOGGLE, "On:", 0, 1, "drive_on");
     fw_def(table, SFX_DRV_FX1, KNOB, "FX1 Send:", 0, 1000, "drive_fx1");
@@ -175,7 +176,7 @@ static void sfx_reset(void)
 
 /* the panel order: knobs fill columns of 2, encoders take 4 at a time */
 static const int16_t SFX_IDS[] = {
-    SFX_CHO_MODE, 0, SFX_CHO_RATE, 500, SFX_CHO_DEPTH, 500, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0,
+    SFX_CHO_MODE, 0, SFX_CHO_RATE, 500, SFX_CHO_DEPTH, 500, SFX_CHO_WIDTH, 500, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0,
     SFX_CHO_ON, 0,
     SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_LEVEL, 500, SFX_DRV_ON, 0, SFX_DRV_FX1, 0, SFX_DRV_FX2, 0,
     SFX_D2_TIME, 700, SFX_D2_SYNC, 8, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_FX1, 0, SFX_D2_FX2, 0,
@@ -183,7 +184,7 @@ static const int16_t SFX_IDS[] = {
 };
 static int sfx_of(unsigned id)      /* which FX an id belongs to, 0 for none */
 {
-    if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2 || id == SFX_CHO_RATE || id == SFX_CHO_DEPTH) return 1;
+    if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2 || id == SFX_CHO_RATE || id == SFX_CHO_DEPTH || id == SFX_CHO_WIDTH) return 1;
     if (id == SFX_DRV_ON || id == SFX_DRV_FX1 || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL) || id == SFX_DRV_FX2) return 2;
     if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2 || id == SFX_D2_BEAT || id == SFX_D2_SYNC) return 3;
     return 0;
@@ -346,15 +347,21 @@ typedef void (*turn_fn)(void *w, int delta);
 #define fw_info ((info_fn)0x08124959)
 #define fw_knob_bind ((knob_bind_fn)0x08128bd1)
 #define fw_knob_info ((knob_info_fn)0x08128fc9)
-#define fw_knob_show ((show_fn)0x081288d9)
-#define fw_btn_show ((show_fn)0x08139739)
+#define fw_knob_name ((show_fn)0x081288fd)  /* redraws a knob's name from its text (FUN_081339b0 after OUT3/OUT4's) */
 #define fw_turn ((turn_fn)0x08128d9d)
 
-static void ts_hide(void *page)
+/* hide (1) or show (0) a widget: its vtable slot 0x2c, as the FX panel hides the knobs it has no param for */
+static void ts_vis(void *page, unsigned off, int hide)
 {
-    fw_knob_show(TP_KNOB(page, TP_OUT4), 0);
-    fw_knob_show(TP_KNOB(page, TP_CUE), 0);
-    fw_btn_show(TP_KNOB(page, TP_CUE_BTN), 0);
+    uint8_t *w = TP_KNOB(page, off);
+    ((void (*)(void *, int))(*(uint32_t **)w)[0x2c / 4])(w, hide);
+}
+/* on our sends only FX3, FX4, FX5 show: Vol, Pan, Gain, CUE (and its button), OUT4 hidden */
+static const uint16_t TP_OTHERS[] = { 0xc398, 0xc768, 0xcb38, TP_CUE, TP_OUT4, TP_CUE_BTN };
+static void ts_hide(void *page, int hide)
+{
+    for (unsigned i = 0; i < sizeof TP_OTHERS / sizeof TP_OTHERS[0]; i++)
+        ts_vis(page, TP_OTHERS[i], hide);
 }
 
 /* bl FUN_08133884 @0x08135720 (event 0x8c: the track screen shown, sub = its half): the first half ends our sends */
@@ -366,8 +373,7 @@ void ts_tp_setup(void *page, int sub, int a, int b)
     ts_set(sub == 1 && armed);
     SU->tpage = (uint32_t)page;
     fw_tp_setup(page, sub, a, b);
-    if (sub == 1 && ts_on())
-        ts_hide(page);
+    ts_hide(page, sub == 1 && ts_on());     /* (the stock halves show them all again) */
 }
 
 static void bind(void *page, unsigned off, uint16_t slot, unsigned id)
@@ -399,7 +405,12 @@ void ts_tp_fill(void *page, void *arg)
     bind(page, TP_FX1, slot, SFX_TS_CHO);
     bind(page, TP_FX2, slot, SFX_TS_DRV);
     bind(page, TP_OUT3, slot, SFX_TS_D2);
-    ts_hide(page);
+    /* OUT3's name is its own text (+0xf8: "OUT3" or "OUT3&4", set after the bind), not the param's */
+    char *name = (char *)TP_KNOB(page, TP_OUT3) + 0xf8;
+    name[0] = 'F'; name[1] = 'X'; name[2] = '5'; name[3] = 0;
+    TP_KNOB(page, TP_OUT3)[0x1f7] = 0;
+    fw_knob_name(TP_KNOB(page, TP_OUT3), 1);
+    ts_hide(page, 1);
 }
 
 /* bl FUN_08128d9c @0x08134360 (an encoder turned on the track screen): the fourth does nothing on our sends */

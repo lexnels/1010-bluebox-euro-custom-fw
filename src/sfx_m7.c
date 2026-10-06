@@ -57,7 +57,7 @@ struct sfx {
     uint32_t magic;
     struct sfx *self;
     /* params, as the M4 sends them */
-    int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level, cho_rate, cho_depth;
+    int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level, cho_rate, cho_depth, cho_width;
     int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
     int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync;
     float bpm;                                                  /* the tempo d2_tgt was worked out for */
@@ -124,7 +124,7 @@ static float warm(float x)
 
 static void defaults(struct sfx *s)
 {
-    s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 0; s->cho_level = 1000; s->cho_rate = 500; s->cho_depth = 500;
+    s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 0; s->cho_level = 1000; s->cho_rate = 500; s->cho_depth = 500; s->cho_width = 500;
     s->drv_on = 0; s->drv_fx1 = 0; s->drv_fx2 = 0; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
     s->d2_on = 0; s->d2_fx1 = 0; s->d2_fx2 = 0; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
     s->d2_beat = 0; s->d2_sync = 8;
@@ -211,6 +211,7 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     case SFX_CHO_LEVEL: s->cho_level = v; break;
     case SFX_CHO_RATE: s->cho_rate = v; break;
     case SFX_CHO_DEPTH: s->cho_depth = v; break;
+    case SFX_CHO_WIDTH: s->cho_width = v; break;
     case SFX_DRV_ON: s->drv_on = v; break;
     case SFX_DRV_FX1: s->drv_fx1 = v; break;
     case SFX_DRV_FX2: s->drv_fx2 = v; break;
@@ -250,6 +251,8 @@ static void chorus(struct sfx *s, const float *il, const float *ir, float *wl, f
     const float a = 0.6f, b = 0.55f;                /* ~9 kHz in, ~7 kHz out: the BBD's band limit */
     float ph = s->cho_ph;
     uint32_t wp = s->cho_wp;
+    int wv = s->cho_width < 0 ? 0 : s->cho_width > 1000 ? 1000 : s->cho_width;
+    const float w = wv * 0.002f;        /* Width: the side signal x0 .. x2 */
     for (unsigned i = 0; i < n; i++) {
         pre += a * ((il[i] + ir[i]) * send - pre);
         s->cho_buf[wp] = pre;
@@ -267,8 +270,9 @@ static void chorus(struct sfx *s, const float *il, const float *ir, float *wl, f
         wp = (wp + 1) & (CHO_N - 1);
         pl += b * (out[0] - pl);
         pr += b * (out[1] - pr);
-        wl[i] = pl;
-        wr[i] = pr;
+        float m = 0.5f * (pl + pr), sd = 0.5f * (pl - pr) * w;
+        wl[i] = m + sd;
+        wr[i] = m - sd;
     }
     s->cho_pre = pre; s->cho_postl = pl; s->cho_postr = pr; s->cho_ph = ph; s->cho_wp = wp;
 }

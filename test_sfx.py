@@ -180,7 +180,16 @@ wl = [a - b for a, b in zip(l, x)]; wr = [a - b for a, b in zip(r, x)]
 rms = lambda v: math.sqrt(sum(t * t for t in v) / len(v))
 print(f"     chorus I: wet rms L {rms(wl[4800:]):.3f} R {rms(wr[4800:]):.3f}, L-R {rms([a-b for a,b in zip(wl,wr)][4800:]):.3f}; {cost} instr/block")
 check(0.25 < rms(wl[4800:]) < 0.4 and 0.25 < rms(wr[4800:]) < 0.4, "chorus: a wet copy at about the dry level (Send 1000, Level 1000)")
-check(rms([a - b for a, b in zip(wl, wr)][4800:]) > 0.02, "chorus: left and right modulated in opposite directions")
+side = rms([a - b for a, b in zip(wl, wr)][4800:])
+check(side > 0.02, "chorus: left and right modulated in opposite directions")
+wid = []
+for wv in (0, 1000):
+    uc, node = setup()
+    l, r, _ = run(uc, node, x, x, [(ids["CHO_ON"], 1), (ids["CHO_WIDTH"], wv)])
+    wid.append((rms([a - b for a, b in zip(l, r)][4800:]), rms([a + b - 2 * c for a, b, c in zip(l, r, x)][4800:])))
+print(f"     chorus Width 0 / 500 / 1000: L-R {wid[0][0]:.3f} / {side:.3f} / {wid[1][0]:.3f}")
+check(wid[0][0] < 1e-4 and abs(wid[1][0] - 2 * side) < 0.1 * side and abs(wid[0][1] - wid[1][1]) < 1e-3,
+      "chorus Width: 0 = mono, 1000 = twice the stereo spread, the middle unchanged")
 # the delay sweep: cross-correlate a click to find the delay over time
 uc, node = setup()
 clicks = [0.0] * T
@@ -377,13 +386,13 @@ check(all(ours[i][1:5] == (8, f"FX{3 + k}:", 0, 1000) for k, i in enumerate(sort
 print("     " + ", ".join(f"{d[2]}{d[5]}" for d in ours.values()))
 lists = {d[0]: d for d in ldefs if d[0] in ids.values()}
 print("     lists: " + ", ".join(f"{d[1]}{d[4]} x{d[3]}" for d in lists.values()))
-check(len(ours) == 24 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
-      "M4: the 24 send FX knobs and toggles defined (track sends too)")
+check(len(ours) == 25 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
+      "M4: the 25 send FX knobs and toggles defined (track sends too)")
 names = lambda p, n: [cs(u32(uc, p + 4 * i)) for i in range(n)]
 check(set(lists) == {ids["CHO_MODE"], ids["D2_SYNC"]} and lists[ids["CHO_MODE"]][3] == 3 and names(lists[ids["CHO_MODE"]][2], 3) == ["I", "II", "I+II"]
       and lists[ids["D2_SYNC"]][3] == 12 and names(lists[ids["D2_SYNC"]][2], 12)[::4] == ["1/64", "1/16D", "1/4"],
       "M4: Mode a list (I, II, I+II), Delay 2's synced Time the stock delay's 12 note values")
-check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 26, "M4: each with its own key")
+check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 27, "M4: each with its own key")
 check(u32(uc, 0x38800FE4) == 0, "M4: boot leaves the FX button at the reverb")
 
 # the reverb set: hall's table, then ours, ending at the common tail with r4, r5 intact
@@ -397,7 +406,7 @@ uc.emu_start(0x08120C1C | 1, 0x0812088C, count=2000)
 uc.hook_del(h)
 check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) == 0x24030000 and uc.reg_read(UC_ARM_REG_R5) == 0x1234
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 reverb set: reaches the common tail with r4, r5, sp intact")
-check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 33
+check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 34
       and {a[0] for a in added[10:]} == set(ids.values()) - TS, f"M4 reverb set: the reverb's 10, then the 23 send FX params ({len(added)})")
 
 # the panel list, filtered by mode
@@ -417,7 +426,7 @@ def lst(mode, slot=0x15):
 rv = lst(0)
 check([e[0] for e in rv] == [0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F], "panel, reverb: only the reverb's knobs")
 c = lst(1); d = lst(2); e = lst(3)
-check([x[0] for x in c] == [ids[k] for k in ("CHO_MODE", "CHO_RATE", "CHO_DEPTH", "CHO_LEVEL", "CHO_FX1", "CHO_FX2", "CHO_ON")] and c[3][4] == 1000, "panel, Chorus: Mode, Rate, Depth, Level, FX1 Send, FX2 Send, ON")
+check([x[0] for x in c] == [ids[k] for k in ("CHO_MODE", "CHO_RATE", "CHO_DEPTH", "CHO_WIDTH", "CHO_LEVEL", "CHO_FX1", "CHO_FX2", "CHO_ON")] and c[4][4] == 1000, "panel, Chorus: Mode, Rate, Depth, Width, Level, FX1 Send, FX2 Send, ON")
 check([x[0] for x in d] == [ids[k] for k in ("DRV_DRIVE", "DRV_TONE", "DRV_LEVEL", "DRV_ON", "DRV_FX1", "DRV_FX2")], "panel, Drive: Drive, Tone, Level, ON, FX1 Send, FX2 Send")
 check([x[0] for x in e] == [ids[k] for k in ("D2_TIME", "D2_FB", "D2_TONE", "D2_LEVEL", "D2_FX1", "D2_FX2", "D2_PING", "D2_BEAT", "D2_ON")], "panel, Delay 2: Time, Feedback, Tone, Level, FX1 Send, FX2 Send, PING, BEAT, ON")
 i = [a[0] for a in added].index(ids["D2_BEAT"]); added[i] = (added[i][0], 1)
@@ -469,7 +478,11 @@ def info(uc, a, s, _):
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 uc.hook_add(UC_HOOK_CODE, info, begin=0x08124958, end=0x08124958)
 stub(uc, 0x08128BD0, binds); stub(uc, 0x08128FC8)
-stub(uc, 0x081288D8, shown); stub(uc, 0x08139738, shown)
+VT, HIDE = 0x20001000, 0x20001100                 # a fake widget vtable: slot 0x2c = hide(w, on)
+uc.mem_write(VT + 0x2C, struct.pack("<I", HIDE | 1)); uc.mem_write(HIDE, b"\x70\x47")
+stub(uc, HIDE, shown); stub(uc, 0x081288FC)
+for off in (0xC398, 0xC768, 0xCB38, 0xCF08, 0xD2D8, 0xD6A8, 0xDA78, 0xDE48, 0xE814): w32(uc, PG + off, VT)
+OTHERS = [(0xC398, 1), (0xC768, 1), (0xCB38, 1), (0xD6A8, 1), (0xDE48, 1), (0xE814, 1)]
 stub(uc, 0x08128D9C, turns)
 def press_track():
     """the track button as the dispatcher handles it (our two hooks), then the screen's setup (event 0x8c)"""
@@ -489,15 +502,17 @@ w32(uc, 0x38800FF4, 1); call(uc, s4["ts_tp_setup"], PG, 1)
 check(u32(uc, 0x38800FF4) == 0, "the track screen shown any other way (flag left on) is the stock half")
 w32(uc, 0x38800FF4, 2); shown.clear()
 call(uc, s4["ts_tp_setup"], PG, 1)
-check(u32(uc, 0x38800FF4) == 1 and sorted((r[0] - PG, r[1]) for r in shown) == [(0xD6A8, 0), (0xDE48, 0), (0xE814, 0)],
-      f"our sends' setup: OUT4, CUE and its button hidden ({[(hex(r[0] - PG), r[1]) for r in shown]})")
-w32(uc, PG + 0xEBBC, 1); binds.clear(); shown.clear(); infos.clear()
+check(u32(uc, 0x38800FF4) == 1 and [(r[0] - PG, r[1]) for r in shown] == OTHERS,
+      f"our sends' setup: Vol, Pan, Gain, CUE (and its button), OUT4 hidden ({[(hex(r[0] - PG), r[1]) for r in shown]})")
+shown.clear(); w32(uc, 0x38800FF4, 0); call(uc, s4["ts_tp_setup"], PG, 1)
+check([(r[0] - PG, r[1]) for r in shown] == [(o, 0) for o, _ in OTHERS], "the stock half shows them all again")
+w32(uc, PG + 0xEBBC, 1); w32(uc, 0x38800FF4, 1); binds.clear(); shown.clear(); infos.clear()
 w32(uc, 0x24030000, 0); uc.mem_write(0x24030004, struct.pack("<H", 3))
 call(uc, s4["ts_tp_fill"], PG, 0x24030000)
 got = [(r[0] - PG, r[1], r[2], r[3]) for r in binds]
 check(got == [(0xCF08, ids["TS_CHO"], 300 + ids["TS_CHO"], 0), (0xD2D8, ids["TS_DRV"], 300 + ids["TS_DRV"], 0), (0xDA78, ids["TS_D2"], 300 + ids["TS_D2"], 0)]
       and infos == [(3, ids["TS_CHO"], b"\x01\x00\x00\x01\x00"), (3, ids["TS_DRV"], b"\x01\x00\x00\x01\x00"), (3, ids["TS_D2"], b"\x01\x00\x00\x01\x00")]
-      and len(shown) == 3, f"our sends' fill: FX1, FX2, OUT3 knobs bound to FX3, FX4, FX5 of track 4 ({[(hex(g[0]), hex(g[1]), g[2]) for g in got]})")
+      and [(r[0] - PG, r[1]) for r in shown] == OTHERS and cs(PG + 0xDA78 + 0xF8) == "FX5", f"our sends' fill: FX1, FX2, OUT3 knobs bound to FX3, FX4, FX5 of track 4 ({[(hex(g[0]), hex(g[1]), g[2]) for g in got]})")
 w32(uc, 0x38800FF4, 0); binds.clear()
 call(uc, s4["ts_tp_fill"], PG, 0x24030000)
 check(binds == [], "stock half's fill untouched")
