@@ -13,7 +13,8 @@
  * Params (src/sfx_ids.h) come with the reverb slot's messages; the M7 copies every message to the master queue (0xc),
  * which we read like src/mst_m7.c does. An FX that is off costs nothing.
  *
- * Memory: about 2 MB (delay 2 lines of 2^18 samples, 5.4 s, per side) from the firmware's SDRAM allocator
+ * Memory: about 1 MB (delay 2 lines of 2^18 16-bit samples, 5.4 s, per side; no more than build 2's, which booted:
+ * the firmware halts at boot when its SDRAM pool runs out, and 2 MB did) from the firmware's SDRAM allocator
  * FUN_080413d0, taken while the graph is built (the delay's constructor call @0x080518d2 is ours), so the pointer,
  * kept in backup SRAM, is fresh on every boot.
  */
@@ -47,7 +48,7 @@ struct bus { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo; };
 #define FS 48000.f
 #define MAXN 32u
 #define NCH 12u
-#define CHO_N 1024u                 /* 21 ms */
+#define CHO_N 512u                  /* 10.7 ms (Depth 1000 sweeps up to 7.2 ms) */
 #define D2_N 262144u                /* 5.46 s: a bar at 45 BPM */
 #define D2_CLEAR 4096u              /* samples per side cleared per block after switching on */
 #define TWO_PI 6.2831853f
@@ -77,7 +78,7 @@ struct sfx {
     float d2_lpl, d2_lpr, d2_hpl[2], d2_hpr[2];
     uint32_t d2_wp, d2_clear;
     float cho_buf[CHO_N];
-    float d2_l[D2_N], d2_r[D2_N];
+    int16_t d2_l[D2_N], d2_r[D2_N];                             /* +-1 as +-32767 (sat keeps them in range) */
 };
 #define SFX_MAGIC 0x58464453u       /* "SDFX" */
 
@@ -294,19 +295,19 @@ static void drive(struct sfx *s, const float *il, const float *ir, float *wl, fl
     }
 }
 
-static float d2_read(const float *line, uint32_t wp, float d)
+static float d2_read(const int16_t *line, uint32_t wp, float d)
 {
     int di = (int)d;
     float f = d - (float)di;
-    float x0 = line[(wp - di) & (D2_N - 1)], x1 = line[(wp - di - 1) & (D2_N - 1)];
-    return x0 + f * (x1 - x0);
+    float x0 = (float)line[(wp - di) & (D2_N - 1)], x1 = (float)line[(wp - di - 1) & (D2_N - 1)];
+    return (x0 + f * (x1 - x0)) * (1.f / 32767.f);
 }
 
 static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, float *wr_, unsigned n)
 {
     if (s->d2_clear < D2_N) {           /* switching on: clear the lines first (a few ms, silent) */
-        zero(s->d2_l + s->d2_clear, D2_CLEAR * 4);
-        zero(s->d2_r + s->d2_clear, D2_CLEAR * 4);
+        zero(s->d2_l + s->d2_clear, D2_CLEAR * 2);
+        zero(s->d2_r + s->d2_clear, D2_CLEAR * 2);
         s->d2_clear += D2_CLEAR;
         s->d2_lpl = s->d2_lpr = 0.f;
         s->d2_hpl[0] = s->d2_hpl[1] = s->d2_hpr[0] = s->d2_hpr[1] = 0.f;
@@ -336,8 +337,8 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, 
             xl = il[i] * send + fb * fl;
             xr = ir[i] * send + fb * fr;
         }
-        s->d2_l[wp] = sat(xl);
-        s->d2_r[wp] = sat(xr);
+        s->d2_l[wp] = (int16_t)(sat(xl) * 32767.f);
+        s->d2_r[wp] = (int16_t)(sat(xr) * 32767.f);
         wp = (wp + 1) & (D2_N - 1);
         wl_[i] = wl;
         wr_[i] = wr;

@@ -95,7 +95,7 @@ p = u32(uc, 0x38800FA4)
 size = u32(uc, HEAP) - p
 print(f"     state {size} bytes at {p:#x}")
 check(r == 0x24050000 and p == 0xC0010000 and u32(uc, 0x38800FA0) == 0x58464453, "sfx_ctor: runs the delay's constructor, then allocates its state")
-check(0x200000 < size < 0x210000 and u32(uc, p) == 0x58464453 and u32(uc, p + 4) == p, "state about 2 MB, marked")
+check(0x100000 < size <= 1052912 and u32(uc, p) == 0x58464453 and u32(uc, p + 4) == p, "state no bigger than build 2's (1052912 bytes; 2 MB ran the SDRAM pool out at boot), marked")
 check(bytes(uc.mem_read(p + size - 0x1010, 0x1000)) == bytes(0x1000), "state zeroed (delay lines)")
 call(uc, s7["sfx_ctor"], 0x24050000)
 check(u32(uc, 0x38800FA4) == p and u32(uc, HEAP) == p + size, "a rebuilt graph keeps the same memory")
