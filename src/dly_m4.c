@@ -245,7 +245,7 @@ void sfx_title(void *w, const char *s)
 }
 void sfx_name(void *w, const char *s)
 {
-    static const char *const t[4] = { 0, "Chorus", "Drive", "Delay 2" };
+    static const char *const t[4] = { 0, "Chorus", "Drive", "Rev Delay" };
     uint32_t m = su_mode();
     fw_text(w, m ? t[m] : s);
 }

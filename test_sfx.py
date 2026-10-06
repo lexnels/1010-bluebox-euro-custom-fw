@@ -459,7 +459,7 @@ uc.mem_write(0x24037000, b"FX2\0Reverb\0")
 for m in range(4):
     uc.mem_write(0x38800FE0, struct.pack("<II", 0x49555846, m))
     call(uc, s4["sfx_title"], 0x24038000, 0x24037000); call(uc, s4["sfx_name"], 0x24038000, 0x24037004)
-check(texts == ["FX2", "Reverb", "FX3", "Chorus", "FX4", "Drive", "FX5", "Delay 2"], f"panel titles: {texts}")
+check(texts == ["FX2", "Reverb", "FX3", "Chorus", "FX4", "Drive", "FX5", "Rev Delay"], f"panel titles: {texts}")
 
 views = []
 stub(uc, 0x08123158, views)
