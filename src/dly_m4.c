@@ -30,16 +30,19 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def_list(table, 0x59, "USB Out:", usb_out_names, 2, "usbout"); /* USB audio out mode (patches/usb.py) */
     /* send FX (patches/sfx.py) */
     fw_def(table, SFX_CHO_ON, TOGGLE, "On:", 0, 1, "chorus_on");
-    fw_def(table, SFX_CHO_SEND, KNOB, "Send:", 0, 1000, "chorus_send");
+    fw_def(table, SFX_CHO_FX1, KNOB, "FX1 Send:", 0, 1000, "chorus_fx1");
+    fw_def(table, SFX_CHO_FX2, KNOB, "FX2 Send:", 0, 1000, "chorus_fx2");
     fw_def(table, SFX_CHO_MODE, INT, "Mode:", 1, 3, "chorus_mode");
     fw_def(table, SFX_CHO_LEVEL, KNOB, "Level:", 0, 1000, "chorus_level");
     fw_def(table, SFX_DRV_ON, TOGGLE, "On:", 0, 1, "drive_on");
-    fw_def(table, SFX_DRV_SEND, KNOB, "Send:", 0, 1000, "drive_send");
+    fw_def(table, SFX_DRV_FX1, KNOB, "FX1 Send:", 0, 1000, "drive_fx1");
+    fw_def(table, SFX_DRV_FX2, KNOB, "FX2 Send:", 0, 1000, "drive_fx2");
     fw_def(table, SFX_DRV_DRIVE, KNOB, "Drive:", 0, 1000, "drive_drive");
     fw_def(table, SFX_DRV_TONE, KNOB, "Tone:", 0, 1000, "drive_tone");
     fw_def(table, SFX_DRV_LEVEL, KNOB, "Level:", 0, 1000, "drive_level");
     fw_def(table, SFX_D2_ON, TOGGLE, "On:", 0, 1, "delay2_on");
-    fw_def(table, SFX_D2_SEND, KNOB, "Send:", 0, 1000, "delay2_send");
+    fw_def(table, SFX_D2_FX1, KNOB, "FX1 Send:", 0, 1000, "delay2_fx1");
+    fw_def(table, SFX_D2_FX2, KNOB, "FX2 Send:", 0, 1000, "delay2_fx2");
     fw_def(table, SFX_D2_TIME, KNOB, "Time:", 0, 1000, "delay2_time");
     fw_def(table, SFX_D2_FB, KNOB, "Feedback:", 0, 1000, "delay2_fb");
     fw_def(table, SFX_D2_TONE, KNOB, "Tone:", 0, 1000, "delay2_tone");
@@ -150,15 +153,16 @@ static void sfx_reset(void) { su_write(0); }
 
 /* the panel order: knobs fill columns of 2, encoders take 4 at a time */
 static const int16_t SFX_IDS[] = {
-    SFX_CHO_SEND, 1000, SFX_CHO_LEVEL, 1000, SFX_CHO_MODE, 1, SFX_CHO_ON, 0,
-    SFX_DRV_SEND, 1000, SFX_DRV_LEVEL, 500, SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_ON, 0,
-    SFX_D2_SEND, 500, SFX_D2_LEVEL, 700, SFX_D2_TIME, 700, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_PING, 0, SFX_D2_ON, 0,
+    SFX_CHO_MODE, 1, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0, SFX_CHO_ON, 0,
+    SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_LEVEL, 500, SFX_DRV_ON, 0, SFX_DRV_FX1, 0, SFX_DRV_FX2, 0,
+    SFX_D2_TIME, 700, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_FX1, 0, SFX_D2_FX2, 0,
+    SFX_D2_PING, 0, SFX_D2_ON, 0,
 };
 static int sfx_of(unsigned id)      /* which FX an id belongs to, 0 for none */
 {
-    if (id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) return 1;
-    if (id == SFX_DRV_ON || id == SFX_DRV_SEND || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL)) return 2;
-    if (id >= SFX_D2_ON && id <= SFX_D2_LEVEL) return 3;
+    if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2) return 1;
+    if (id == SFX_DRV_ON || id == SFX_DRV_FX1 || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL) || id == SFX_DRV_FX2) return 2;
+    if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2) return 3;
     return 0;
 }
 
@@ -201,7 +205,7 @@ int sfx_list(void *app, uint16_t *slot, uint32_t *out)
     return ret;
 }
 
-/* bl FUN_081427e2 @0x0812bcac / @0x0812bcb8: the reverb panel's titles "FX2" and "Reverb" */
+/* bl FUN_081427e2 @0x0812bc90 / @0x0812bc9c: the reverb panel's titles "FX2" and "Reverb" */
 typedef void (*text_fn)(void *w, const char *s);
 #define fw_text ((text_fn)0x081427e3)
 void sfx_title(void *w, const char *s)

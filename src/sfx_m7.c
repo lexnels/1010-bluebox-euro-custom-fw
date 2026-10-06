@@ -1,11 +1,12 @@
 /*
  * Send FX, M7 side: a Juno-style chorus, a warm drive and a second delay, each switched on and off on its own.
  *
- * The graph runs the reverb (bus 14) and the delay (bus 13), then node 0x30 (vtable 0x0806b9f0, process FUN_08050e6c),
- * which adds both FX returns into the master bus 12 and chains on to the master chain. sfx_process replaces that
- * process: on entry bus 12 holds the dry mix of all channels (post-fader), which feeds the three FX (for now through a
- * Send knob on each); their wet outputs are added into bus 12 next to the stock returns. So they are in the main out,
- * the master compressor and saturator, and recordings of the main mix.
+ * The mixer sums the channels into bus 12 and their FX1/FX2 sends into bus 13 (the delay) and bus 14 (the reverb);
+ * the graph then runs the reverb, the delay (each wet-only, in place on its bus) and node 0x30, which adds both
+ * returns into bus 12. sfx_process runs first, in the reverb's vtable slot (0x0806adac, ahead of hall_process): each
+ * FX takes the dry mix in bus 12 (for now; per-track sends are to come), and its output goes into bus 12 (Level) and
+ * into the delay's and reverb's buses (FX1 Send, FX2 Send) before they run. So the FX are in the main out, the master
+ * compressor and saturator, and recordings of the main mix.
  *
  * Params (src/sfx_ids.h) come with the reverb slot's messages; the M7 copies every message to the master queue (0xc),
  * which we read like src/mst_m7.c does. An FX that is off costs nothing.
@@ -26,7 +27,7 @@ typedef int (*event_fn)(void *queue, unsigned index, void *event);
 typedef void (*stereo_fn)(void *bus, float **l, float **r);
 typedef void *(*ctor_fn)(void *obj);
 typedef uint32_t (*alloc_fn)(uint32_t size);
-#define fw_returns  ((process_fn)FN(0x08050e6c))
+#define fw_reverb   ((process_fn)FN(HALL_PROCESS))     /* hall_process (src/hall_m7.c), from build.sh */
 #define fw_dly_ctor ((ctor_fn)FN(0x08052e30))
 #define fw_alloc    ((alloc_fn)FN(0x080413d0))
 #define fw_bus      ((bus_fn)FN(0x08053cd4))
@@ -50,9 +51,9 @@ struct sfx {
     uint32_t magic;
     struct sfx *self;
     /* params, as the M4 sends them */
-    int32_t cho_on, cho_send, cho_mode, cho_level;
-    int32_t drv_on, drv_send, drv_drive, drv_tone, drv_level;
-    int32_t d2_on, d2_send, d2_time, d2_fb, d2_tone, d2_ping, d2_level;
+    int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level;
+    int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
+    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level;
     /* chorus */
     float cho_ph, cho_inc, cho_ctr, cho_dep;                    /* LFO phase 0..1, per sample; delay in samples */
     float cho_pre, cho_postl, cho_postr, cho_g, cho_gt;
@@ -112,9 +113,9 @@ static float warm(float x)
 
 static void defaults(struct sfx *s)
 {
-    s->cho_on = 0; s->cho_send = 1000; s->cho_mode = 1; s->cho_level = 1000;
-    s->drv_on = 0; s->drv_send = 1000; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
-    s->d2_on = 0; s->d2_send = 500; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
+    s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 1; s->cho_level = 1000;
+    s->drv_on = 0; s->drv_fx1 = 0; s->drv_fx2 = 0; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
+    s->d2_on = 0; s->d2_fx1 = 0; s->d2_fx2 = 0; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
 }
 
 /* derived values for the current params */
@@ -127,20 +128,20 @@ static void update(struct sfx *s)
     s->cho_inc = rate[m] / FS;
     s->cho_ctr = ctr[m] * FS * 0.001f;
     s->cho_dep = dep[m] * FS * 0.001f;
-    s->cho_gt = s->cho_on ? s->cho_level * 0.001f : 0.f;
+    s->cho_gt = s->cho_on ? 1.f : 0.f;
 
     float d = s->drv_drive * 0.001f;
     s->drv_gain = exp2f_(6.f * d);                                    /* 0 .. +36 dB into the clipper */
     float up = warm(0.25f * s->drv_gain + 0.3f) - warm(0.3f), dn = warm(0.3f) - warm(0.3f - 0.25f * s->drv_gain);
     s->drv_k = 0.25f / (up > dn ? up : dn);                           /* -12 dBFS peaks stay put as Drive rises */
     s->drv_lp = lp_coef(500.f * exp2f_(5.3f * s->drv_tone * 0.001f));   /* 500 Hz .. 20 kHz */
-    s->drv_gt = s->drv_on ? s->drv_level * 0.001f : 0.f;
+    s->drv_gt = s->drv_on ? 1.f : 0.f;
 
     s->d2_tgt = 10.f * exp2f_(7.643856f * s->d2_time * 0.001f) * FS * 0.001f;  /* 10 ms * 200^t */
     if (s->d2_tgt > (float)(D2_N - 4)) s->d2_tgt = (float)(D2_N - 4);
     s->d2_fbg = s->d2_fb * 0.00098f;                                  /* up to 0.98 */
     s->d2_lp = lp_coef(800.f * exp2f_(4.5f * s->d2_tone * 0.001f));   /* 800 Hz .. 18 kHz in the loop */
-    s->d2_gt = s->d2_on ? s->d2_level * 0.001f : 0.f;
+    s->d2_gt = s->d2_on ? 1.f : 0.f;
 }
 
 /* Replaces bl FUN_08052e30 @0x080518d2 (the delay's constructor, while the graph is built). */
@@ -170,11 +171,13 @@ static int set(struct sfx *s, unsigned id, int32_t v)
 {
     switch (id) {
     case SFX_CHO_ON: s->cho_on = v; break;
-    case SFX_CHO_SEND: s->cho_send = v; break;
+    case SFX_CHO_FX1: s->cho_fx1 = v; break;
+    case SFX_CHO_FX2: s->cho_fx2 = v; break;
     case SFX_CHO_MODE: s->cho_mode = v; break;
     case SFX_CHO_LEVEL: s->cho_level = v; break;
     case SFX_DRV_ON: s->drv_on = v; break;
-    case SFX_DRV_SEND: s->drv_send = v; break;
+    case SFX_DRV_FX1: s->drv_fx1 = v; break;
+    case SFX_DRV_FX2: s->drv_fx2 = v; break;
     case SFX_DRV_DRIVE: s->drv_drive = v; break;
     case SFX_DRV_TONE: s->drv_tone = v; break;
     case SFX_DRV_LEVEL: s->drv_level = v; break;
@@ -183,7 +186,8 @@ static int set(struct sfx *s, unsigned id, int32_t v)
             s->d2_clear = 0;                /* wipe what the lines held when it was last on */
         s->d2_on = v;
         break;
-    case SFX_D2_SEND: s->d2_send = v; break;
+    case SFX_D2_FX1: s->d2_fx1 = v; break;
+    case SFX_D2_FX2: s->d2_fx2 = v; break;
     case SFX_D2_TIME: s->d2_time = v; break;
     case SFX_D2_FB: s->d2_fb = v; break;
     case SFX_D2_TONE: s->d2_tone = v; break;
@@ -194,9 +198,11 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     return 1;
 }
 
-static void chorus(struct sfx *s, const float *il, const float *ir, float *l, float *r, unsigned n)
+/* Each FX writes its wet output into wl, wr. */
+static void chorus(struct sfx *s, const float *il, const float *ir, float *wl, float *wr, unsigned n)
 {
-    float send = s->cho_send * 0.0005f, pre = s->cho_pre, pl = s->cho_postl, pr = s->cho_postr, g = s->cho_g;
+    const float send = 0.5f;            /* mono in, as the Juno */
+    float pre = s->cho_pre, pl = s->cho_postl, pr = s->cho_postr;
     const float a = 0.6f, b = 0.55f;                /* ~9 kHz in, ~7 kHz out: the BBD's band limit */
     float ph = s->cho_ph;
     uint32_t wp = s->cho_wp;
@@ -217,16 +223,16 @@ static void chorus(struct sfx *s, const float *il, const float *ir, float *l, fl
         wp = (wp + 1) & (CHO_N - 1);
         pl += b * (out[0] - pl);
         pr += b * (out[1] - pr);
-        g += 0.002f * (s->cho_gt - g);
-        l[i] += pl * g;
-        r[i] += pr * g;
+        wl[i] = pl;
+        wr[i] = pr;
     }
-    s->cho_pre = pre; s->cho_postl = pl; s->cho_postr = pr; s->cho_g = g; s->cho_ph = ph; s->cho_wp = wp;
+    s->cho_pre = pre; s->cho_postl = pl; s->cho_postr = pr; s->cho_ph = ph; s->cho_wp = wp;
 }
 
-static void drive(struct sfx *s, const float *il, const float *ir, float *l, float *r, unsigned n)
+static void drive(struct sfx *s, const float *il, const float *ir, float *wl, float *wr, unsigned n)
 {
-    float send = s->drv_send * 0.001f, gain = s->drv_gain, k = s->drv_k, a = s->drv_lp, g = s->drv_g;
+    const float send = 1.f;
+    float gain = s->drv_gain, k = s->drv_k, a = s->drv_lp;
     const float bias = 0.3f, sb = warm(bias);      /* the bias and the uneven curve: even harmonics, warmth */
     for (unsigned i = 0; i < n; i++) {
         float x[2] = { il[i] * send, ir[i] * send };
@@ -240,11 +246,9 @@ static void drive(struct sfx *s, const float *il, const float *ir, float *l, flo
             *lp[c] += a * (h - *lp[c]);
             y[c] = *lp[c] * k;
         }
-        g += 0.002f * (s->drv_gt - g);
-        l[i] += y[0] * g;
-        r[i] += y[1] * g;
+        wl[i] = y[0];
+        wr[i] = y[1];
     }
-    s->drv_g = g;
 }
 
 static float d2_read(const float *line, uint32_t wp, float d)
@@ -255,7 +259,7 @@ static float d2_read(const float *line, uint32_t wp, float d)
     return x0 + f * (x1 - x0);
 }
 
-static void delay2(struct sfx *s, const float *il, const float *ir, float *l, float *r, unsigned n)
+static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, float *wr_, unsigned n)
 {
     if (s->d2_clear < D2_N) {           /* switching on: clear the lines first (a few ms, silent) */
         zero(s->d2_l + s->d2_clear, D2_CLEAR * 4);
@@ -264,9 +268,12 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *l, fl
         s->d2_lpl = s->d2_lpr = 0.f;
         s->d2_hpl[0] = s->d2_hpl[1] = s->d2_hpr[0] = s->d2_hpr[1] = 0.f;
         s->d2_cur = s->d2_tgt;
+        zero(wl_, n * 4);
+        zero(wr_, n * 4);
         return;
     }
-    float send = s->d2_send * 0.001f, fb = s->d2_fbg, a = s->d2_lp, g = s->d2_g, cur = s->d2_cur;
+    const float send = 1.f;
+    float fb = s->d2_fbg, a = s->d2_lp, cur = s->d2_cur;
     uint32_t wp = s->d2_wp;
     int ping = s->d2_ping;
     for (unsigned i = 0; i < n; i++) {
@@ -289,28 +296,37 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *l, fl
         s->d2_l[wp] = sat(xl);
         s->d2_r[wp] = sat(xr);
         wp = (wp + 1) & (D2_N - 1);
-        g += 0.002f * (s->d2_gt - g);
-        l[i] += wl * g;
-        r[i] += wr * g;
+        wl_[i] = wl;
+        wr_[i] = wr;
     }
-    s->d2_g = g; s->d2_cur = cur; s->d2_wp = wp;
+    s->d2_cur = cur; s->d2_wp = wp;
 }
 
-static int silent(const float *x, unsigned n)
+/* An FX's wet output into the main mix (Level) and into the delay's and reverb's send buses (FX1 Send, FX2 Send);
+ * g ramps it in and out as the FX is switched on and off. */
+struct dest { float *l12, *r12, *l13, *r13, *l14, *r14; };
+static void out(const struct dest *d, float *g, float gt, int32_t level, int32_t fx1, int32_t fx2,
+                const float *wl, const float *wr, unsigned n)
 {
-    for (unsigned i = 0; i < n; i++)
-        if (x[i] > 1e-6f || x[i] < -1e-6f)
-            return 0;
-    return 1;
+    float lv = level * 0.001f, f1 = d->l13 ? fx1 * 0.001f : 0.f, f2 = d->l14 ? fx2 * 0.001f : 0.f, gg = *g;
+    for (unsigned i = 0; i < n; i++) {
+        gg += 0.002f * (gt - gg);
+        float a = wl[i] * gg, b = wr[i] * gg;
+        d->l12[i] += a * lv;
+        d->r12[i] += b * lv;
+        if (f1 != 0.f) { d->l13[i] += a * f1; d->r13[i] += b * f1; }
+        if (f2 != 0.f) { d->l14[i] += a * f2; d->r14[i] += b * f2; }
+    }
+    *g = gg;
 }
 
-/* Node 0x30's process (vtable slot 0x0806b9fc): our FX into bus 12, then the stock FX returns and the chain. */
+/* The reverb's process (vtable slot 0x0806adac): our FX, then the reverb (hall_process) and the chain. */
 unsigned sfx_process(void *obj, void *ctx)
 {
     bkp_enable();
     struct sfx *s = SP->s;
     if (SP->magic != SFX_MAGIC || !s || s->magic != SFX_MAGIC)
-        return fw_returns(obj, ctx);
+        return fw_reverb(obj, ctx);
     void *q = fw_queue(ctx, 0xc);
     struct fw_ev ev;
     int changed = 0;
@@ -321,7 +337,7 @@ unsigned sfx_process(void *obj, void *ctx)
         update(s);
     int cho = s->cho_on || s->cho_g > 1e-4f, drv = s->drv_on || s->drv_g > 1e-4f, d2 = s->d2_on || s->d2_g > 1e-4f;
     if (!cho && !drv && !d2)
-        return fw_returns(obj, ctx);
+        return fw_reverb(obj, ctx);
 
     struct bus *b = fw_bus(ctx, 12);
     unsigned n = fw_frames(b);
@@ -331,19 +347,33 @@ unsigned sfx_process(void *obj, void *ctx)
         if (cho && ++s->cho_quiet > CHO_N / MAXN) cho = 0;
         if (drv && ++s->drv_quiet > 4) drv = 0;
         if (!cho && !drv && !d2)
-            return fw_returns(obj, ctx);
-    }
-    float *l, *r;
-    fw_stereo(b, &l, &r);               /* zero-filled if it was silent */
-    float il[MAXN], ir[MAXN];
-    for (unsigned i = 0; i < n; i++) {
-        il[i] = l[i];
-        ir[i] = r[i];
-    }
-    if (!silent(il, n) || !silent(ir, n))
+            return fw_reverb(obj, ctx);
+    } else
         s->cho_quiet = s->drv_quiet = 0;
-    if (cho) chorus(s, il, ir, l, r, n);
-    if (drv) drive(s, il, ir, l, r, n);
-    if (d2) delay2(s, il, ir, l, r, n);
-    return fw_returns(obj, ctx);
+    struct dest d;
+    fw_stereo(b, &d.l12, &d.r12);       /* zero-filled if it was silent */
+    float il[MAXN], ir[MAXN], wl[MAXN], wr[MAXN];
+    for (unsigned i = 0; i < n; i++) {  /* the dry mix, before any FX adds to it */
+        il[i] = d.l12[i];
+        ir[i] = d.r12[i];
+    }
+    /* the send buses only when something goes to them (fw_stereo wakes a silent bus, and its FX with it) */
+    int to13 = (cho && s->cho_fx1) || (drv && s->drv_fx1) || (d2 && s->d2_fx1);
+    int to14 = (cho && s->cho_fx2) || (drv && s->drv_fx2) || (d2 && s->d2_fx2);
+    d.l13 = d.r13 = d.l14 = d.r14 = 0;
+    if (to13) fw_stereo(fw_bus(ctx, 13), &d.l13, &d.r13);
+    if (to14) fw_stereo(fw_bus(ctx, 14), &d.l14, &d.r14);
+    if (cho) {
+        chorus(s, il, ir, wl, wr, n);
+        out(&d, &s->cho_g, s->cho_gt, s->cho_level, s->cho_fx1, s->cho_fx2, wl, wr, n);
+    }
+    if (drv) {
+        drive(s, il, ir, wl, wr, n);
+        out(&d, &s->drv_g, s->drv_gt, s->drv_level, s->drv_fx1, s->drv_fx2, wl, wr, n);
+    }
+    if (d2) {
+        delay2(s, il, ir, wl, wr, n);
+        out(&d, &s->d2_g, s->d2_gt, s->d2_level, s->d2_fx1, s->d2_fx2, wl, wr, n);
+    }
+    return fw_reverb(obj, ctx);
 }

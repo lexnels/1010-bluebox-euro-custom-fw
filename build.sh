@@ -17,6 +17,7 @@ arm-none-eabi-gcc -mcpu=cortex-m7 -mfpu=fpv5-d16 $(echo "$COMMON" | sed 's/-Os/-
 arm-none-eabi-objcopy -O binary -j .cave out/mst7.elf out/mst7.bin
 arm-none-eabi-gcc -mcpu=cortex-m7 -mfpu=fpv5-d16 $COMMON -fno-tree-loop-distribute-patterns -T src/usb7.ld -o out/usb7.elf src/usb_m7.c
 arm-none-eabi-objcopy -O binary -j .cave out/usb7.elf out/usb7.bin
-arm-none-eabi-gcc -mcpu=cortex-m7 -mfpu=fpv5-d16 $(echo "$COMMON" | sed 's/-Os/-O2/') -fno-tree-loop-distribute-patterns -T src/sfx7.ld -o out/sfx7.elf src/sfx_m7.c
+HALL_PROCESS=0x$(arm-none-eabi-nm out/hall7.elf | awk '$3 == "hall_process" {print $1}')   # the send FX run ahead of it
+arm-none-eabi-gcc -mcpu=cortex-m7 -mfpu=fpv5-d16 $(echo "$COMMON" | sed 's/-Os/-O2/') -fno-tree-loop-distribute-patterns -DHALL_PROCESS=$HALL_PROCESS -T src/sfx7.ld -o out/sfx7.elf src/sfx_m7.c
 arm-none-eabi-objcopy -O binary -j .cave out/sfx7.elf out/sfx7.bin
 arm-none-eabi-size -A out/dly4.elf out/mst7.elf out/usb7.elf out/sfx7.elf | grep -E 'cave|elf'
