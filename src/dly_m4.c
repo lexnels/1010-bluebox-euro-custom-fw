@@ -142,8 +142,9 @@ void dly_layout(uint8_t *p)
 struct sfx_ui {
     uint32_t magic;
     uint32_t mode;                  /* the FX button: 0 reverb, 1 chorus, 2 drive, 3 delay 2 */
-    uint16_t rows[6];               /* the track screen's second page's param per row (stock 0x0814e280, or ours) */
-    uint32_t page3;                 /* the track screen's second page shows our sends (its third page) */
+    uint32_t tpage;                 /* the track screen's page (seen by ts_tp_setup) */
+    uint16_t _rows[4];              /* (unused) */
+    uint32_t page3;                 /* the track screen shows our sends (between it and the sidechain screen) */
 };
 #define SU ((volatile struct sfx_ui *)0x38800fe0u)    /* own 32-byte line, M4 only */
 #define SU_MAGIC 0x49555846u
@@ -170,8 +171,6 @@ static void sfx_reset(void)
 {
     su_write(0);
     SU->page3 = 0;
-    for (int i = 0; i < 6; i++)
-        SU->rows[i] = ((const uint16_t *)0x0814e280)[i];
 }
 
 /* the panel order: knobs fill columns of 2, encoders take 4 at a time */
@@ -274,10 +273,10 @@ void sfx_from_reverb(void *app, unsigned view, int a, int b)
  * Track sends. Each channel's set (FUN_0812060c case 1) gets three more params, so they are kept, saved with the
  * project and sent to the M7 with the channel's slot like FX1/FX2 (src/sfx_m7.c sums them).
  *
- * The track screen (views 2 and 3, page app+0x558) shows one row's param for every channel; view 2 has Vol, Gain,
- * Solo, Mute, Rec, view 3 Pan, FX1, FX2, CUE, OUT3, OUT4 (FUN_0812f604 sets the labels, FUN_0812f398 picks a row from
- * the table at 0x0814e280 for view 3). The track button shows our page between the track and sidechain screens:
- * view 3 with rows FX3, FX4, FX5 (our sends), from a table in backup SRAM that the literal @0x0812f51c now points to.
+ * The track screen (page app+0xcfb70, views 5 and 6 = its two halves, FUN_08133884 picks one, FUN_081339b0 fills
+ * its knobs for the selected track) has Vol, Pan, Gain on the first half, FX1, FX2, OUT3, OUT4 (and CUE) on the
+ * second. The track button goes track screen -> sidechain screen (view 0x16); we put a turn between: the second
+ * half again, with FX3, FX4, FX5 (our sends) in place of FX1, FX2, OUT3, and OUT4 and CUE hidden.
  */
 void ts_set_add(void *set, unsigned id, int value)    /* the channel set's last add (bl @0x08120888, id 0x173) */
 {
@@ -287,79 +286,121 @@ void ts_set_add(void *set, unsigned id, int value)    /* the channel set's last 
     fw_add(set, SFX_TS_D2, 0);
 }
 
-static uint32_t ts_page3(void)
+static uint32_t ts_on(void)
 {
     su_mode();                      /* backup SRAM on */
     return SU->magic == SU_MAGIC && SU->page3 == 1;
 }
-static void ts_set_page3(uint32_t on)
+static void ts_set(uint32_t on)
 {
-    su_mode();
+    su_mode();                      /* backup SRAM on */
     if (SU->magic != SU_MAGIC)
         su_write(0);
+    PWR_CR1_M4 |= 1u << 8;
     SU->page3 = on;
 }
 
-/* The mixer button (button 0, dispatcher event 0xf9) shows the stock pages only: going to the second page (view 3)
- * from the first (@0x0812471e) or from another screen (@0x08124712, the last mixer view) clears our flag. */
-void ts_mixer_view(void *app, unsigned view, int a, int b)
+/* the track button (button 1): from the track screen (views 5, 6) to the sidechain screen (@0x08124758), from
+ * anywhere else back to the track screen (@0x0812474c, its last half) */
+void ts_track_next(void *app, unsigned view, int a, int b)
 {
-    ts_set_page3(0);
-    fw_view(app, view, a, b);
-}
-
-/* The track button (button 1): from the track screen (views 5, 6) it goes to the sidechain screen (view 0x16,
- * @0x08124758), and from anywhere else back to the track screen (@0x0812474c). Our page goes between the track and
- * sidechain screens: the mixer's second page (view 3) with our rows. */
-#define APP_VIEW(app) (*((uint8_t *)(app) + 0x73d2))
-void ts_track_to_sends(void *app, unsigned view, int a, int b)
-{
-    (void)view;
-    ts_set_page3(1);
-    fw_view(app, 3, a, b);
+    if (ts_on()) {
+        ts_set(0);
+        fw_view(app, view, a, b);   /* from our sends on to the sidechain screen */
+    } else {
+        ts_set(1);
+        fw_view(app, 6, a, b);      /* the track screen's second half, as our sends */
+    }
 }
 void ts_track_back(void *app, unsigned view, int a, int b)
 {
-    if (APP_VIEW(app) == 3 && ts_page3()) {
-        ts_set_page3(0);
-        fw_view(app, 0x16, a, b);   /* on from our page to the sidechain screen */
-    } else
-        fw_view(app, view, a, b);
+    ts_set(0);
+    fw_view(app, view, a, b);
 }
 
-#define TS_SUB(p) (*(int *)((uint8_t *)(p) + 0xd26c))          /* the page shown: 0 = view 2, 1 = view 3 */
-#define TS_ROW(p, sub) (*(int *)((uint8_t *)(p) + (0x349c + (sub)) * 4))   /* the row picked on each */
-typedef void (*page_fn)(void *page, int sub);
-typedef void (*label_fn)(void *w, const char *s);
-#define fw_page ((page_fn)0x0812f605)
-#define fw_row ((page_fn)0x0812f399)
-#define fw_label ((label_fn)0x08139725)
-static const uint16_t TS_LABEL[6] = { 0xc084, 0xc124, 0xc1c4, 0xc264, 0xc304, 0xc3a4 };  /* and each + 0x3c0 */
+#define TP_PAGE 0xcfb70             /* the track screen's page in the app */
+#define TP_SUB(p) (*(int *)((uint8_t *)(p) + 0xebbc))   /* the track screen's half: 0 first, 1 second */
+#define TP_KNOB(p, off) ((uint8_t *)(p) + (off))
+#define TP_FX1 0xcf08               /* knobs of the second half: encoder 1 */
+#define TP_FX2 0xd2d8               /* encoder 3 */
+#define TP_OUT3 0xda78              /* encoder 2 */
+#define TP_OUT4 0xde48              /* encoder 4 */
+#define TP_CUE 0xd6a8
+#define TP_CUE_BTN 0xe814
+#define FW_STATE ((void *)0x30018010)                  /* the params (the literal FUN_081339b0 uses) */
+typedef void (*tp_setup_fn)(void *page, int sub, int a, int b);
+typedef void (*tp_fill_fn)(void *page, void *slot);
+typedef void (*getp_fn)(void *state, uint16_t *slot, uint16_t *id, int *value);
+typedef void (*info_fn)(void *state, uint16_t *slot, unsigned id, uint8_t *info);
+typedef void (*knob_bind_fn)(void *w, unsigned id, int value, int force);
+typedef void (*knob_info_fn)(void *w, uint8_t *info);
+typedef void (*show_fn)(void *w, int on);
+typedef void (*turn_fn)(void *w, int delta);
+#define fw_tp_setup ((tp_setup_fn)0x08133885)
+#define fw_tp_fill ((tp_fill_fn)0x081339b1)
+#define fw_getp ((getp_fn)0x08122581)
+#define fw_info ((info_fn)0x08124959)
+#define fw_knob_bind ((knob_bind_fn)0x08128bd1)
+#define fw_knob_info ((knob_info_fn)0x08128fc9)
+#define fw_knob_show ((show_fn)0x081288d9)
+#define fw_btn_show ((show_fn)0x08139739)
+#define fw_turn ((turn_fn)0x08128d9d)
 
-/* both bl FUN_0812f604 (@0x081356a8 on event 0x7f, @0x0812f8ec on a redraw) */
-void ts_page(void *page, int sub)
+static void ts_hide(void *page)
 {
-    static const uint16_t ours[6] = { SFX_TS_CHO, SFX_TS_DRV, SFX_TS_D2, 0, 0, 0 };
-    static const char *const names[6] = { "FX3", "FX4", "FX5", "", "", "" };
-    int on = ts_page3() && sub == 1;     /* (ts_page3 first: it switches backup SRAM on) */
-    for (int i = 0; i < 6; i++)
-        SU->rows[i] = on ? ours[i] : ((const uint16_t *)0x0814e280)[i];
-    if (on && (unsigned)TS_ROW(page, 1) > 2)
-        TS_ROW(page, 1) = 0;
-    fw_page(page, sub);
-    if (on) {
-        for (int i = 0; i < 6; i++) {
-            fw_label((uint8_t *)page + TS_LABEL[i], names[i]);
-            fw_label((uint8_t *)page + TS_LABEL[i] + 0x3c0, names[i]);
-        }
-        fw_row(page, TS_ROW(page, 1));      /* again: the highlight follows the labels */
-    }
+    fw_knob_show(TP_KNOB(page, TP_OUT4), 0);
+    fw_knob_show(TP_KNOB(page, TP_CUE), 0);
+    fw_btn_show(TP_KNOB(page, TP_CUE_BTN), 0);
 }
 
-/* bl FUN_0812f398 @0x0812f590 (a row picked): our page has three */
-void ts_row(void *page, int row)
+/* bl FUN_08133884 @0x08135720 (event 0x8c: the track screen shown, sub = its half): the first half ends our sends */
+void ts_tp_setup(void *page, int sub, int a, int b)
 {
-    if (TS_SUB(page) == 1 && ts_page3() && (unsigned)row > 2)
+    /* our sends only come from the track screen itself (ts_track_next); from anywhere else it's the stock half */
+    uint8_t prev = *((uint8_t *)page - TP_PAGE + 0x73d3);   /* the view before (FUN_08123158 keeps it) */
+    ts_set(sub == 1 && (prev == 5 || prev == 6) && ts_on());
+    SU->tpage = (uint32_t)page;
+    fw_tp_setup(page, sub, a, b);
+    if (sub == 1 && ts_on())
+        ts_hide(page);
+}
+
+static void bind(void *page, unsigned off, uint16_t slot, unsigned id)
+{
+    uint16_t sl = slot, pid = (uint16_t)id;
+    int v = 0;
+    uint32_t info[8];               /* as FUN_081339b0 sets it: [0] = 1, [2] = 0, [3] = 1, [4] = 0 */
+    for (int i = 0; i < 8; i++)
+        ((volatile uint32_t *)info)[i] = 0;
+    ((uint8_t *)info)[0] = 1;
+    ((uint8_t *)info)[3] = 1;
+    fw_getp(FW_STATE, &sl, &pid, &v);
+    fw_knob_bind(TP_KNOB(page, off), id, v, 0);
+    sl = slot;
+    fw_info(FW_STATE, &sl, id, (uint8_t *)info);
+    fw_knob_info(TP_KNOB(page, off), (uint8_t *)info);
+}
+
+/* the three bl FUN_081339b0 in the track screen's handler (@0x081342d8, @0x081342f4, @0x08134316): fill as stock,
+ * then on our sends rebind the second half's knobs */
+void ts_tp_fill(void *page, void *arg)
+{
+    fw_tp_fill(page, arg);
+    if (TP_SUB(page) != 1 || !ts_on())
         return;
-    fw_row(page, row);
+    uint16_t slot = *(uint16_t *)((uint8_t *)arg + 4);
+    if (slot >= 12)
+        return;
+    bind(page, TP_FX1, slot, SFX_TS_CHO);
+    bind(page, TP_FX2, slot, SFX_TS_DRV);
+    bind(page, TP_OUT3, slot, SFX_TS_D2);
+    ts_hide(page);
+}
+
+/* bl FUN_08128d9c @0x08134360 (an encoder turned on the track screen): the fourth does nothing on our sends */
+void ts_tp_turn(uint8_t *w, int delta)
+{
+    if (ts_on() && SU->tpage && w == TP_KNOB(SU->tpage, TP_OUT4))
+        return;
+    fw_turn(w, delta);
 }

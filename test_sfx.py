@@ -53,6 +53,11 @@ def stub(uc, addr, rec=None, rv=0):
 u32 = lambda uc, a: struct.unpack("<I", uc.mem_read(a, 4))[0]
 w32 = lambda uc, a, v: uc.mem_write(a, struct.pack("<I", v & 0xFFFFFFFF))
 
+_prev = open("out/cpu+hall+delay+master+usb/BLUEEURO.BIN", "rb").read()   # the image before this patchset
+def stock_at(addr, n):
+    o = addr - 0x08040000 if addr < 0x08100000 else addr - 0x08100000 + 0xC0000
+    return _prev[o:o + n]
+
 def bl_target(addr):
     h1, h2 = struct.unpack("<HH", at(addr, 4))
     s = (h1 >> 10) & 1; i1 = 1 - (((h2 >> 13) & 1) ^ s); i2 = 1 - (((h2 >> 11) & 1) ^ s)
@@ -72,11 +77,11 @@ check(bl_target(0x08120C34) == s4["sfx_rv_tail"] and bl_target(0x0812BCCA) == s4
 check(bl_target(0x081247D8) == s4["sfx_to_reverb"] and bl_target(0x081247E4) == s4["sfx_from_reverb"], "FX button: delay->reverb and reverb->next -> ours")
 check(bl_target(0x0805070A) == s7["sfx_strip"], "mixer's per-channel call -> sfx_strip")
 check(bl_target(0x08120888) == s4["ts_set_add"], "channel set's last add -> ts_set_add")
-check(bl_target(0x0812471E) == s4["ts_mixer_view"] and bl_target(0x08124712) == s4["ts_mixer_view"] and bl_target(0x0812472A) == 0x08123158,
-      "mixer button into its second page -> ts_mixer_view (stock pages); 3 -> 2 stock")
-check(bl_target(0x08124758) == s4["ts_track_to_sends"] and bl_target(0x0812474C) == s4["ts_track_back"], "track button: track screen -> our page -> sidechain")
-check(bl_target(0x081356A8) == s4["ts_page"] and bl_target(0x0812F8EC) == s4["ts_page"] and bl_target(0x0812F590) == s4["ts_row"], "track screen setup (both calls) and row pick -> ours")
-check(struct.unpack("<I", at(0x0812F51C, 4))[0] == 0x38800FE8, "track screen page 2 row table -> backup SRAM copy")
+check(bl_target(0x08124758) == s4["ts_track_next"] and bl_target(0x0812474C) == s4["ts_track_back"]
+      and bl_target(0x0812471E) == 0x08123158 and bl_target(0x08124712) == 0x08123158, "track button -> ours; mixer button stock")
+check(bl_target(0x08135720) == s4["ts_tp_setup"] and all(bl_target(a) == s4["ts_tp_fill"] for a in (0x081342D8, 0x081342F4, 0x08134316))
+      and bl_target(0x08134360) == s4["ts_tp_turn"], "track screen setup, fill (3 calls), encoder turn -> ours")
+check(at(0x081356A8, 4) == stock_at(0x081356A8, 4) and at(0x0812F51C, 4) == stock_at(0x0812F51C, 4), "mixer screen untouched")
 
 # ---- M7: allocation at graph build
 HEAP = 0x24000004
@@ -449,48 +454,55 @@ call(uc, s4["ts_set_add"], 0x24030000, 0x173, 1)
 uc.hook_del(h)
 check(added == [(0x173, 1), (ids["TS_CHO"], 0), (ids["TS_DRV"], 0), (ids["TS_D2"], 0)], f"channel set: 0x173, then the three track sends at 0 ({added})")
 views.clear()
-APP = 0x24039000
-def press_track():
-    """the track button as the dispatcher handles it, with our two hooks"""
-    v = uc.mem_read(APP + 0x73D2, 1)[0]
-    if v in (5, 6): call(uc, s4["ts_track_to_sends"], APP, 0x16, 0, 0)
-    else: call(uc, s4["ts_track_back"], APP, 5, 0, 0)
-    uc.mem_write(APP + 0x73D2, bytes([views[-1][1]]))
-    return views[-1][1], u32(uc, 0x38800FF4)
-uc.mem_write(APP + 0x73D2, bytes([2])); w32(uc, 0x38800FF4, 0)
-seq = [press_track() for _ in range(4)]
-uc.mem_write(APP + 0x73D2, bytes([3])); w32(uc, 0x38800FF4, 0)
-other = press_track()
-w32(uc, 0x38800FF4, 1); call(uc, s4["ts_mixer_view"], APP, 3, 0, 0)
-check(seq == [(5, 0), (3, 1), (0x16, 0), (5, 0)] and other == (5, 0) and u32(uc, 0x38800FF4) == 0,
-      f"track button: track screen -> FX3..FX5 page -> sidechain -> track; the mixer's own page 2 stays stock ({seq}, {other})")
-PG = 0x24040000
-uc.mem_map(0x24080000, 0x20000) if False else None
-pages, rows, labels = [], [], []
-def f604(uc, a, s, _):
-    pages.append((uc.reg_read(UC_ARM_REG_R1), list(struct.unpack("<6H", uc.mem_read(0x38800FE8, 12)))))
+APP = 0xC0200000
+PG = APP + 0xCFB70
+setups, binds, shown, turns = [], [], [], []
+stub(uc, 0x08133884, setups)
+stub(uc, 0x081339B0)
+def getp(uc, a, s, _):
+    sl, pid = struct.unpack("<H", uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 2))[0], struct.unpack("<H", uc.mem_read(uc.reg_read(UC_ARM_REG_R2), 2))[0]
+    w32(uc, uc.reg_read(UC_ARM_REG_R3), sl * 100 + pid); uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+uc.hook_add(UC_HOOK_CODE, getp, begin=0x08122580, end=0x08122580)
+infos = []
+def info(uc, a, s, _):
+    infos.append((struct.unpack("<H", uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 2))[0], uc.reg_read(UC_ARM_REG_R2), bytes(uc.mem_read(uc.reg_read(UC_ARM_REG_R3), 5))))
     uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
-uc.hook_add(UC_HOOK_CODE, f604, begin=0x0812F604, end=0x0812F604)
-stub(uc, 0x0812F398, rows)
-def lab(uc, a, s, _):
-    labels.append((uc.reg_read(UC_ARM_REG_R0) - PG, cs(uc.reg_read(UC_ARM_REG_R1)))); uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
-uc.hook_add(UC_HOOK_CODE, lab, begin=0x08139724, end=0x08139724)
-stock = list(struct.unpack("<6H", at(0x0814E280, 12)))
-w32(uc, PG + (0x349C + 1) * 4, 4)                   # OUT3 picked on the stock page
-w32(uc, 0x38800FF4, 1)
-call(uc, s4["ts_page"], PG, 1)                    # page3 on
-on = (pages[-1], [l for l in labels], rows[-1][1] if rows else None, u32(uc, PG + (0x349C + 1) * 4))
-pages.clear(); labels.clear(); rows.clear()
-w32(uc, 0x38800FF4, 0)
-call(uc, s4["ts_page"], PG, 1)
-off = (pages[-1], labels[:], len(rows))
-print(f"     third page: rows {[hex(x) for x in on[0][1]]}, labels {sorted(set(l[1] for l in on[1]))}")
-check(on[0] == (1, [ids["TS_CHO"], ids["TS_DRV"], ids["TS_D2"], 0, 0, 0]) and on[3] == 0 and on[2] == 0
-      and {l[1] for l in on[1] if l[0] in (0xC084, 0xC444)} == {"FX3"} and {l[1] for l in on[1] if l[0] in (0xC1C4, 0xC584)} == {"FX5"}
-      and len(on[1]) == 12, "third page: rows FX3, FX4, FX5 (our sends), labels on both columns, a picked row past them back to the first")
-check(off == ((1, stock), [], 0), "second page (page3 off): stock rows (Pan, FX1, FX2, CUE, OUT3, OUT4), no relabel")
-w32(uc, 0x38800FF4, 1); w32(uc, PG + 0xD26C, 1); rows.clear()
-call(uc, s4["ts_row"], PG, 4); call(uc, s4["ts_row"], PG, 2)
-w32(uc, PG + 0xD26C, 0); call(uc, s4["ts_row"], PG, 4)
-check([r[1] for r in rows] == [2, 4], f"row pick: the third page ignores its empty rows, the first page is untouched ({[r[1] for r in rows]})")
+uc.hook_add(UC_HOOK_CODE, info, begin=0x08124958, end=0x08124958)
+stub(uc, 0x08128BD0, binds); stub(uc, 0x08128FC8)
+stub(uc, 0x081288D8, shown); stub(uc, 0x08139738, shown)
+stub(uc, 0x08128D9C, turns)
+def press_track():
+    """the track button as the dispatcher handles it (our two hooks), then the screen's setup (event 0x8c)"""
+    v = uc.mem_read(APP + 0x73D2, 1)[0]
+    if v in (5, 6): call(uc, s4["ts_track_next"], APP, 0x16, 0, 0)
+    else: call(uc, s4["ts_track_back"], APP, 6, 0, 0)
+    nv = views[-1][1]
+    uc.mem_write(APP + 0x73D2, bytes([nv, v]))  # current, previous (FUN_08123158)
+    if nv in (5, 6):
+        call(uc, s4["ts_tp_setup"], PG, nv - 5)
+        w32(uc, PG + 0xEBBC, nv - 5)
+    return nv, u32(uc, 0x38800FF4)
+uc.mem_write(APP + 0x73D2, bytes([5, 2])); w32(uc, 0x38800FF4, 0)
+seq = [press_track() for _ in range(4)]
+check(seq == [(6, 1), (0x16, 0), (6, 0), (6, 1)], f"track button: track screen -> our sends -> sidechain -> track screen -> our sends ({seq})")
+uc.mem_write(APP + 0x73D2, bytes([6, 0x10])); call(uc, s4["ts_tp_setup"], PG, 1)
+check(u32(uc, 0x38800FF4) == 0, "the track screen reached from another screen (flag left on) is the stock half")
+uc.mem_write(APP + 0x73D2, bytes([6, 5])); w32(uc, 0x38800FF4, 1); shown.clear()
+call(uc, s4["ts_tp_setup"], PG, 1)
+check(u32(uc, 0x38800FF4) == 1 and sorted((r[0] - PG, r[1]) for r in shown) == [(0xD6A8, 0), (0xDE48, 0), (0xE814, 0)],
+      f"our sends' setup: OUT4, CUE and its button hidden ({[(hex(r[0] - PG), r[1]) for r in shown]})")
+w32(uc, PG + 0xEBBC, 1); binds.clear(); shown.clear(); infos.clear()
+w32(uc, 0x24030000, 0); uc.mem_write(0x24030004, struct.pack("<H", 3))
+call(uc, s4["ts_tp_fill"], PG, 0x24030000)
+got = [(r[0] - PG, r[1], r[2], r[3]) for r in binds]
+check(got == [(0xCF08, ids["TS_CHO"], 300 + ids["TS_CHO"], 0), (0xD2D8, ids["TS_DRV"], 300 + ids["TS_DRV"], 0), (0xDA78, ids["TS_D2"], 300 + ids["TS_D2"], 0)]
+      and infos == [(3, ids["TS_CHO"], b"\x01\x00\x00\x01\x00"), (3, ids["TS_DRV"], b"\x01\x00\x00\x01\x00"), (3, ids["TS_D2"], b"\x01\x00\x00\x01\x00")]
+      and len(shown) == 3, f"our sends' fill: FX1, FX2, OUT3 knobs bound to FX3, FX4, FX5 of track 4 ({[(hex(g[0]), hex(g[1]), g[2]) for g in got]})")
+w32(uc, 0x38800FF4, 0); binds.clear()
+call(uc, s4["ts_tp_fill"], PG, 0x24030000)
+check(binds == [], "stock half's fill untouched")
+w32(uc, 0x38800FF4, 1); turns.clear()
+call(uc, s4["ts_tp_turn"], PG + 0xDE48, 1); call(uc, s4["ts_tp_turn"], PG + 0xCF08, 1)
+w32(uc, 0x38800FF4, 0); call(uc, s4["ts_tp_turn"], PG + 0xDE48, 1)
+check([t[0] - PG for t in turns] == [0xCF08, 0xDE48], "encoder 4 (hidden OUT4) does nothing on our sends only")
 print("all passed")
