@@ -91,8 +91,20 @@
     <button id="save" type="button">Save BLUEEURO.BIN</button>
   </div>
 
-  <p class="small">Going back to stock: install your stock firmware file the same way.<br>
-    Stock file SHA-256: <code>{{STOCK_SHA256}}</code></p>
+  <div class="card">
+    <h2>Going back to stock firmware</h2>
+    <div class="warn"><strong>Back up your projects first</strong> (copy the whole microSD card to your computer).
+      Projects saved with the modded firmware won't work with the stock firmware, so after rolling back you can only
+      use projects saved before you installed the mod.</div>
+    <ol>
+      <li>Back up the microSD card to your computer.</li>
+      <li>Delete the projects you saved while running the modded firmware.</li>
+      <li>Delete the settings files on the card.</li>
+      <li>Copy your stock <code>BLUEEURO.BIN</code> (version 1.5.1) to the root of the card and install it like a 1010music update by booting while holding the A button.</li>
+    </ol>
+  </div>
+
+  <p class="small">Stock file SHA-256: <code>{{STOCK_SHA256}}</code></p>
 </main>
 <script>
 const STOCK_SHA256 = "{{STOCK_SHA256}}";
