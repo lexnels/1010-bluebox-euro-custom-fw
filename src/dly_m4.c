@@ -291,6 +291,11 @@ static uint32_t ts_on(void)
     su_mode();                      /* backup SRAM on */
     return SU->magic == SU_MAGIC && SU->page3 == 1;
 }
+static uint32_t ts_armed(void)
+{
+    su_mode();
+    return SU->magic == SU_MAGIC && SU->page3 == 2;
+}
 static void ts_set(uint32_t on)
 {
     su_mode();                      /* backup SRAM on */
@@ -308,7 +313,7 @@ void ts_track_next(void *app, unsigned view, int a, int b)
         ts_set(0);
         fw_view(app, view, a, b);   /* from our sends on to the sidechain screen */
     } else {
-        ts_set(1);
+        ts_set(2);                  /* armed: the track screen's setup turns it on */
         fw_view(app, 6, a, b);      /* the track screen's second half, as our sends */
     }
 }
@@ -318,7 +323,6 @@ void ts_track_back(void *app, unsigned view, int a, int b)
     fw_view(app, view, a, b);
 }
 
-#define TP_PAGE 0xcfb70             /* the track screen's page in the app */
 #define TP_SUB(p) (*(int *)((uint8_t *)(p) + 0xebbc))   /* the track screen's half: 0 first, 1 second */
 #define TP_KNOB(p, off) ((uint8_t *)(p) + (off))
 #define TP_FX1 0xcf08               /* knobs of the second half: encoder 1 */
@@ -356,9 +360,10 @@ static void ts_hide(void *page)
 /* bl FUN_08133884 @0x08135720 (event 0x8c: the track screen shown, sub = its half): the first half ends our sends */
 void ts_tp_setup(void *page, int sub, int a, int b)
 {
-    /* our sends only come from the track screen itself (ts_track_next); from anywhere else it's the stock half */
-    uint8_t prev = *((uint8_t *)page - TP_PAGE + 0x73d3);   /* the view before (FUN_08123158 keeps it) */
-    ts_set(sub == 1 && (prev == 5 || prev == 6) && ts_on());
+    /* our sends only when ts_track_next asked for them (armed, 2); any other showing is the stock half. (The view
+     * switch only queues event 0x8c, so this runs after it.) */
+    uint32_t armed = ts_armed();
+    ts_set(sub == 1 && armed);
     SU->tpage = (uint32_t)page;
     fw_tp_setup(page, sub, a, b);
     if (sub == 1 && ts_on())

@@ -455,7 +455,7 @@ uc.hook_del(h)
 check(added == [(0x173, 1), (ids["TS_CHO"], 0), (ids["TS_DRV"], 0), (ids["TS_D2"], 0)], f"channel set: 0x173, then the three track sends at 0 ({added})")
 views.clear()
 APP = 0xC0200000
-PG = APP + 0xCFB70
+PG = 0xC0300000                                  # (the screen's owner is not the button handler's app)
 setups, binds, shown, turns = [], [], [], []
 stub(uc, 0x08133884, setups)
 stub(uc, 0x081339B0)
@@ -485,9 +485,9 @@ def press_track():
 uc.mem_write(APP + 0x73D2, bytes([5, 2])); w32(uc, 0x38800FF4, 0)
 seq = [press_track() for _ in range(4)]
 check(seq == [(6, 1), (0x16, 0), (6, 0), (6, 1)], f"track button: track screen -> our sends -> sidechain -> track screen -> our sends ({seq})")
-uc.mem_write(APP + 0x73D2, bytes([6, 0x10])); call(uc, s4["ts_tp_setup"], PG, 1)
-check(u32(uc, 0x38800FF4) == 0, "the track screen reached from another screen (flag left on) is the stock half")
-uc.mem_write(APP + 0x73D2, bytes([6, 5])); w32(uc, 0x38800FF4, 1); shown.clear()
+w32(uc, 0x38800FF4, 1); call(uc, s4["ts_tp_setup"], PG, 1)
+check(u32(uc, 0x38800FF4) == 0, "the track screen shown any other way (flag left on) is the stock half")
+w32(uc, 0x38800FF4, 2); shown.clear()
 call(uc, s4["ts_tp_setup"], PG, 1)
 check(u32(uc, 0x38800FF4) == 1 and sorted((r[0] - PG, r[1]) for r in shown) == [(0xD6A8, 0), (0xDE48, 0), (0xE814, 0)],
       f"our sends' setup: OUT4, CUE and its button hidden ({[(hex(r[0] - PG), r[1]) for r in shown]})")
