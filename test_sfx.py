@@ -272,6 +272,17 @@ def d2_ramp(rv):
 fw_, rv_ = d2_ramp(0), d2_ramp(1000)
 print(f"     delay 2 ramp echo, Reverse 0: {fw_[0]}..{fw_[1]} ({fw_[2]:.2f} -> {fw_[3]:.2f}); Reverse 1000: {rv_[0]}..{rv_[1]} ({rv_[2]:.2f} -> {rv_[3]:.2f})")
 check(fw_[2] < fw_[3] and rv_[2] > rv_[3] and abs((rv_[1] - rv_[0]) - (fw_[1] - fw_[0])) < 100, "delay 2 Reverse: 0 plays the repeat forwards, 1000 backwards")
+# Rev Delay Drift: the echo of a click moves about (0 holds still)
+def d2_echo_times(dr):
+    uc, node = setup()
+    x = [0.0] * 48000
+    for k in range(2400, 48000, 4800): x[k] = 1.0
+    l, _, _ = run(uc, node, x, x, [(ids["D2_ON"], 1), (ids["D2_TIME"], 500), (ids["D2_FB"], 0), (ids["D2_LEVEL"], 1000), (ids["D2_TONE"], 1000), (ids["D2_DRIFT"], dr)], skip=80)
+    w = [a - b for a, b in zip(l, x)]
+    return [max(range(k + 6000, k + 8000), key=lambda i: abs(w[i])) - k for k in range(7200, 40000, 4800)]
+e0, e1 = d2_echo_times(0), d2_echo_times(1000)
+print(f"     Rev Delay echo delays (samples), Drift 0: {e0}; Drift 1000: {e1}")
+check(max(e0) - min(e0) <= 1 and max(e1) - min(e1) > 100 and min(e1) >= min(e0) and max(e1) - min(e0) < 800, "Rev Delay Drift: 0 holds still, 1000 wanders up to 16 ms longer")
 # delay 2: lines cleared on switching on (silent), then an echo at the set time
 uc, node = setup()
 imp = [0.0] * 48000
@@ -402,13 +413,13 @@ check(all(ours[i][1:5] == (8, f"FX{3 + k}:", 0, 1000) for k, i in enumerate(sort
 print("     " + ", ".join(f"{d[2]}{d[5]}" for d in ours.values()))
 lists = {d[0]: d for d in ldefs if d[0] in ids.values()}
 print("     lists: " + ", ".join(f"{d[1]}{d[4]} x{d[3]}" for d in lists.values()))
-check(len(ours) == 26 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
-      "M4: the 26 send FX knobs and toggles defined (track sends too)")
+check(len(ours) == 27 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
+      "M4: the 27 send FX knobs and toggles defined (track sends too)")
 names = lambda p, n: [cs(u32(uc, p + 4 * i)) for i in range(n)]
 check(set(lists) == {ids["CHO_MODE"], ids["D2_SYNC"]} and lists[ids["CHO_MODE"]][3] == 3 and names(lists[ids["CHO_MODE"]][2], 3) == ["I", "II", "I+II"]
       and lists[ids["D2_SYNC"]][3] == 12 and names(lists[ids["D2_SYNC"]][2], 12)[::4] == ["1/64", "1/16D", "1/4"],
       "M4: Mode a list (I, II, I+II), Delay 2's synced Time the stock delay's 12 note values")
-check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 28, "M4: each with its own key")
+check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 29, "M4: each with its own key")
 check(u32(uc, 0x38800FE4) == 0, "M4: boot leaves the FX button at the reverb")
 
 # the reverb set: hall's table, then ours, ending at the common tail with r4, r5 intact
@@ -422,7 +433,7 @@ uc.emu_start(0x08120C1C | 1, 0x0812088C, count=2000)
 uc.hook_del(h)
 check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) == 0x24030000 and uc.reg_read(UC_ARM_REG_R5) == 0x1234
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 reverb set: reaches the common tail with r4, r5, sp intact")
-check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 35
+check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 36
       and {a[0] for a in added[10:]} == set(ids.values()) - TS, f"M4 reverb set: the reverb's 10, then the 23 send FX params ({len(added)})")
 
 # the panel list, filtered by mode
@@ -444,7 +455,25 @@ check([e[0] for e in rv] == [0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x
 c = lst(1); d = lst(2); e = lst(3)
 check([x[0] for x in c] == [ids[k] for k in ("CHO_MODE", "CHO_RATE", "CHO_DEPTH", "CHO_WIDTH", "CHO_LEVEL", "CHO_FX1", "CHO_FX2", "CHO_ON")] and c[4][4] == 1000, "panel, Chorus: Mode, Rate, Depth, Width, Level, FX1 Send, FX2 Send, ON")
 check([x[0] for x in d] == [ids[k] for k in ("DRV_DRIVE", "DRV_TONE", "DRV_LEVEL", "DRV_ON", "DRV_FX1", "DRV_FX2")], "panel, Drive: Drive, Tone, Level, ON, FX1 Send, FX2 Send")
-check([x[0] for x in e] == [ids[k] for k in ("D2_TIME", "D2_FB", "D2_TONE", "D2_LEVEL", "D2_REV", "D2_FX1", "D2_FX2", "D2_PING", "D2_BEAT", "D2_ON")], "panel, Delay 2: Time, Feedback, Tone, Level, Reverse, FX1 Send, FX2 Send, PING, BEAT, ON")
+check([x[0] for x in e] == [ids[k] for k in ("D2_TIME", "D2_FB", "D2_TONE", "D2_LEVEL", "D2_REV", "D2_DRIFT", "D2_FX1", "D2_FX2", "D2_PING", "D2_ON", "D2_BEAT")], "panel, Rev Delay: 8 knobs (Time .. Reverse, Drift, FX1, FX2), PING, ON, BEAT")
+# where Rev Delay's widgets 8..11 go: PING, ON right of the knobs (column 4), BEAT (10) left of them
+PN, VT2, RECT = 0xC0380000, 0x20001200, 0x20001300
+uc.mem_write(VT2 + 0x20, struct.pack("<I", RECT | 1)); uc.mem_write(RECT, b"\x70\x47")
+rects = []
+def rect(uc, a, s_, _):
+    rects.append((uc.reg_read(UC_ARM_REG_R0), struct.unpack("<4i", uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 16))))
+    uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+uc.hook_add(UC_HOOK_CODE, rect, begin=RECT, end=RECT)
+stub(uc, 0x0812BC60)
+uc.mem_write(PN + 4, struct.pack("<ii", 100, 50)); uc.mem_write(PN + 0xC398, b"\0")
+KW = lambda i: PN + 0xC3B0 + i * 0x3D0
+for i in range(8, 12): w32(uc, KW(i), VT2); w32(uc, PN + 0x100B0 + i * 0x1D4, VT2)
+def cols(mode):
+    uc.mem_write(0x38800FE0, struct.pack("<II", 0x49555846, mode)); rects.clear()
+    uc.mem_write(0x24030000, struct.pack("<h", 0x15)); call(uc, s4["dly_populate"], PN, 0x24030000)
+    return {i: next(((r[0] - 100) // 0x30 - 1) for w, r in rects if w == KW(i)) for i in range(8, 12) if any(w == KW(i) for w, _ in rects)}
+rv, back = cols(3), cols(0)
+check(rv == {8: 4, 9: 4, 10: -1, 11: 5} and back.get(10) == 5, f"Rev Delay panel: PING, ON in column 4, BEAT left of the knobs; the reverb's own back in place ({rv}, {back})")
 i = [a[0] for a in added].index(ids["D2_BEAT"]); added[i] = (added[i][0], 1)
 e = lst(3); added[i] = (added[i][0], 0)
 check([x[0] for x in e][:2] == [ids["D2_SYNC"], ids["D2_FB"]] and ids["D2_TIME"] not in [x[0] for x in e] and e[0][4] == 8,

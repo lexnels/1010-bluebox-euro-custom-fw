@@ -30,4 +30,5 @@
 #define SFX_TS_DRV    0x5f
 #define SFX_TS_D2     0x60
 #define SFX_D2_REV    0x62          /* the chance (0..1000 = 0..100 %) that a repeat plays backwards */
+#define SFX_D2_DRIFT  0x64          /* tape drift, as the FX1 delay's (0x3a): a wobbling, wandering extra delay up to 16 ms */
 #define SFX_CHO_WIDTH 0x61          /* stereo width of its output: 0 = mono, 500 = as the Juno (opposite LFOs), 1000 = x2 */

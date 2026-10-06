@@ -59,7 +59,7 @@ struct sfx {
     /* params, as the M4 sends them */
     int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level, cho_rate, cho_depth, cho_width;
     int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
-    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync, d2_rev;
+    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync, d2_rev, d2_drift;
     float bpm;                                                  /* the tempo d2_tgt was worked out for */
     float ts[3][NCH];                                           /* track sends, 0..1, per FX and channel */
     uint32_t act;                                               /* bit per FX: running, so it wants input */
@@ -77,7 +77,9 @@ struct sfx {
     float d2_cur, d2_tgt, d2_fbg, d2_lp, d2_g, d2_gt;
     float d2_lpl, d2_lpr, d2_hpl[2], d2_hpr[2];
     uint32_t d2_wp, d2_clear;
-    uint32_t d2_seg, d2_j, d2_T, d2_rng, d2_isrev;               /* Reverse: this repeat's length, where in it, backwards? */
+    uint32_t d2_seg, d2_j, d2_T, d2_rng, d2_isrev;
+    float d2_dph, d2_dnoise, d2_dtgt, d2_dm;                    /* Drift: LFO phase, wander, its target, extra delay */
+    uint32_t d2_dcount, d2_drng;               /* Reverse: this repeat's length, where in it, backwards? */
     float cho_buf[CHO_N];
     int16_t d2_l[D2_N], d2_r[D2_N];                             /* +-1 as +-32767 (sat keeps them in range) */
 };
@@ -139,7 +141,7 @@ static void defaults(struct sfx *s)
     s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 0; s->cho_level = 1000; s->cho_rate = 500; s->cho_depth = 500; s->cho_width = 500;
     s->drv_on = 0; s->drv_fx1 = 0; s->drv_fx2 = 0; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
     s->d2_on = 0; s->d2_fx1 = 0; s->d2_fx2 = 0; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
-    s->d2_beat = 0; s->d2_sync = 8; s->d2_rev = 0;
+    s->d2_beat = 0; s->d2_sync = 8; s->d2_rev = 0; s->d2_drift = 0;
     s->bpm = 120.f;
 }
 
@@ -171,7 +173,7 @@ static void update(struct sfx *s)
         s->d2_tgt = ticks[k] * (60.f / 960.f) * FS / s->bpm;
     } else
         s->d2_tgt = 10.f * exp2f_(7.643856f * s->d2_time * 0.001f) * FS * 0.001f;  /* 10 ms * 200^t */
-    if (s->d2_tgt > (float)(D2_N - 4)) s->d2_tgt = (float)(D2_N - 4);
+    if (s->d2_tgt > (float)(D2_N - 4 - 1024)) s->d2_tgt = (float)(D2_N - 4 - 1024);   /* (room for Drift's 16 ms) */
     s->d2_fbg = s->d2_fb * 0.00098f;                                  /* up to 0.98 */
     s->d2_lp = lp_coef(800.f * exp2f_(4.5f * s->d2_tone * 0.001f));   /* 800 Hz .. 18 kHz in the loop */
     s->d2_gt = s->d2_on ? 1.f : 0.f;
@@ -246,6 +248,7 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     case SFX_D2_BEAT: s->d2_beat = v; break;
     case SFX_D2_SYNC: s->d2_sync = v; break;
     case SFX_D2_REV: s->d2_rev = v; break;
+    case SFX_D2_DRIFT: s->d2_drift = v; break;
     default: return 0;
     }
     return 1;
@@ -344,9 +347,30 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, 
      * sits in the loop, so the feedback carries reversed repeats on (and rolls again on each pass). */
     uint32_t chance = s->d2_rev <= 0 ? 0u : s->d2_rev >= 1000 ? 0xffffffffu : (uint32_t)s->d2_rev * 4294967u;
     uint32_t seg = s->d2_seg, j = s->d2_j, T = s->d2_T, rev = s->d2_isrev, rng = s->d2_rng ? s->d2_rng : 0x9e3779b9u;
+    /* Drift, as the FX1 delay's: a 0.6 Hz wobble plus a slower random wander, extra delay 0 .. 2A (A up to 8 ms,
+     * about +-2.5 % pitch at full), ramped across the block */
+    float depth = s->d2_drift <= 0 ? 0.f : s->d2_drift >= 1000 ? 1.f : (float)s->d2_drift * 1e-3f;
+    float fa = depth * 0.008f * FS, m0 = s->d2_dm, m1 = 0.f;
+    if (fa > 0.f) {
+        s->d2_dph += 0.6f * (float)n / FS;
+        if (s->d2_dph >= 1.f) s->d2_dph -= 1.f;
+        if ((s->d2_dcount++ & 511u) == 0) {             /* a new wander target every ~0.34 s */
+            s->d2_drng = s->d2_drng * 1664525u + 1013904223u;
+            s->d2_dtgt = (float)(int32_t)s->d2_drng * (1.f / 2147483648.f);
+        }
+        s->d2_dnoise += (s->d2_dtgt - s->d2_dnoise) * 0.004f;
+        float x = 2.f * s->d2_dph - 1.f;                /* a parabolic sine over the phase */
+        float sn = 4.f * x * (1.f - (x < 0.f ? -x : x));
+        m1 = fa * (1.f + 0.6f * sn + 0.4f * s->d2_dnoise);
+        if (m0 <= 0.f) m0 = m1;                         /* just turned on: no jump from 0 */
+    }
+    float dm = (m1 - m0) / (float)n, m = m0;
+    s->d2_dm = m1;
     for (unsigned i = 0; i < n; i++) {
         cur += 0.0002f * (s->d2_tgt - cur);             /* time changes glide, tape style (~100 ms) */
-        float wl = d2_read(s->d2_l, wp, cur), wr = d2_read(s->d2_r, wp, cur);
+        m += dm;
+        float rd = cur + m;
+        float wl = d2_read(s->d2_l, wp, rd), wr = d2_read(s->d2_r, wp, rd);
         if (!(chance | rev)) {                          /* Reverse at 0: nothing to do (the next repeat starts afresh) */
         } else if (j >= seg) {                          /* a new repeat */
             T = (uint32_t)cur;

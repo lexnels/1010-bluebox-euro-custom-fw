@@ -54,6 +54,7 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, SFX_D2_PING, TOGGLE, "Ping:", 0, 1, "delay2_ping");
     fw_def(table, SFX_D2_LEVEL, KNOB, "Level:", 0, 1000, "delay2_level");
     fw_def(table, SFX_D2_REV, KNOB, "Reverse:", 0, 1000, "delay2_reverse");
+    fw_def(table, SFX_D2_DRIFT, KNOB, "Drift:", 0, 1000, "delay2_drift");
     fw_def(table, SFX_D2_BEAT, TOGGLE, "Beat Sync:", 0, 1, "delay2_beat");
     fw_def_list(table, SFX_D2_SYNC, "Time:", SYNC_NAMES, 12, "delay2_sync");
     /* track sends, per channel (type 8 0..1000 like FX1 0xda) */
@@ -98,6 +99,8 @@ typedef void (*layout_fn)(uint8_t *panel);
 #define TOG_W(p, i) ((uint8_t *)(p) + 0x100b0 + (i) * 0x1d4)
 
 static const int8_t DLY_COL[4] = { -1, -1, 4, 4 };  /* widgets 8..11 on the delay panel */
+static const int8_t RVD_COL[4] = { 4, 4, -1, 5 };   /* on Rev Delay (the reverb slot, mode 3): BEAT (10) to the left */
+static uint32_t su_mode(void);
 
 static void move(uint8_t *w, int x, int y)
 {
@@ -113,7 +116,7 @@ static void place(uint8_t *p, int slot)
         return;
     int x0 = *(int *)(p + 4), y0 = *(int *)(p + 8);
     for (int i = 8; i < 12; i++) {
-        int col = slot == 0x14 ? DLY_COL[i - 8] : i >> 1;
+        int col = slot == 0x14 ? DLY_COL[i - 8] : su_mode() == 3 ? RVD_COL[i - 8] : i >> 1;
         int x = x0 + 0x30 * (col + 1), y = y0 + 0x2d - 0x2c * (i & 1);
         move(KNOB_W(p, i), x, y);
         move(TOG_W(p, i), x, y);
@@ -180,14 +183,14 @@ static const int16_t SFX_IDS[] = {
     SFX_CHO_MODE, 0, SFX_CHO_RATE, 500, SFX_CHO_DEPTH, 500, SFX_CHO_WIDTH, 500, SFX_CHO_LEVEL, 1000, SFX_CHO_FX1, 0, SFX_CHO_FX2, 0,
     SFX_CHO_ON, 0,
     SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_LEVEL, 500, SFX_DRV_ON, 0, SFX_DRV_FX1, 0, SFX_DRV_FX2, 0,
-    SFX_D2_TIME, 700, SFX_D2_SYNC, 8, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_REV, 0, SFX_D2_FX1, 0, SFX_D2_FX2, 0,
-    SFX_D2_PING, 0, SFX_D2_BEAT, 0, SFX_D2_ON, 0,
+    SFX_D2_TIME, 700, SFX_D2_SYNC, 8, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_LEVEL, 700, SFX_D2_REV, 0, SFX_D2_DRIFT, 0, SFX_D2_FX1, 0,
+    SFX_D2_FX2, 0, SFX_D2_PING, 0, SFX_D2_ON, 0, SFX_D2_BEAT, 0,   /* 8 knobs; PING, ON right of them; BEAT (10) left */
 };
 static int sfx_of(unsigned id)      /* which FX an id belongs to, 0 for none */
 {
     if ((id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) || id == SFX_CHO_FX2 || id == SFX_CHO_RATE || id == SFX_CHO_DEPTH || id == SFX_CHO_WIDTH) return 1;
     if (id == SFX_DRV_ON || id == SFX_DRV_FX1 || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL) || id == SFX_DRV_FX2) return 2;
-    if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2 || id == SFX_D2_BEAT || id == SFX_D2_SYNC || id == SFX_D2_REV) return 3;
+    if ((id >= SFX_D2_ON && id <= SFX_D2_LEVEL) || id == SFX_D2_FX2 || id == SFX_D2_BEAT || id == SFX_D2_SYNC || id == SFX_D2_REV || id == SFX_D2_DRIFT) return 3;
     return 0;
 }
 
