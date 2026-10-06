@@ -163,6 +163,20 @@ static void update(struct sfx *s)
     s->d2_gt = s->d2_on ? 1.f : 0.f;
 }
 
+/* Our state, once sfx_ctor has set it up in this heap's life; 0 before (backup SRAM keeps the pointer, and SDRAM
+ * keeps the old state over a reset, so after one both look valid until the graph is built again: the bump pointer
+ * tells, it is back below them until then). */
+static struct sfx *state(void)
+{
+    bkp_enable();
+    struct sfx *s = SP->s;
+    uint32_t a = (uint32_t)s;
+    if (SP->magic != SFX_MAGIC || a < 0xc0000000u || a + sizeof(struct sfx) > HEAP_TOP
+        || s->magic != SFX_MAGIC || s->self != s)
+        return 0;
+    return s;
+}
+
 /* Replaces bl FUN_08052e30 @0x080518d2 (the delay's constructor, while the graph is built). */
 void *sfx_ctor(void *obj)
 {
@@ -352,9 +366,8 @@ static void out(const struct dest *d, float *g, float gt, int32_t level, int32_t
 /* The reverb's process (vtable slot 0x0806adac): our FX, then the reverb (hall_process) and the chain. */
 unsigned sfx_process(void *obj, void *ctx)
 {
-    bkp_enable();
-    struct sfx *s = SP->s;
-    if (SP->magic != SFX_MAGIC || !s || s->magic != SFX_MAGIC)
+    struct sfx *s = state();
+    if (!s)
         return fw_reverb(obj, ctx);
     void *q = fw_queue(ctx, 0xc);
     struct fw_ev ev;
@@ -421,8 +434,10 @@ unsigned sfx_process(void *obj, void *ctx)
 void sfx_strip(void *mixer, void *in, unsigned idx, float *ch, void *mainb, void *ctx)
 {
     fw_strip(mixer, in, idx, ch, mainb, ctx);
-    struct sfx *s = SP->s;              /* backup SRAM is on: sfx_ctor enabled it at graph build */
-    if (SP->magic != SFX_MAGIC || !s || s->magic != SFX_MAGIC || !s->act || idx >= NCH)
+    if (idx >= NCH)
+        return;
+    struct sfx *s = state();            /* the mixer runs from boot, maybe before the graph's FX are built */
+    if (!s || !s->act)
         return;
     struct bus *b = (struct bus *)((uint8_t *)ch + 20);
     if (b->silent || !b->l)

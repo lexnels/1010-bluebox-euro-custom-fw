@@ -314,6 +314,20 @@ wf = max(abs(a - b) for a, b in zip(lf[2400:], x[2400:]))
 print(f"     drive fed by channel 4 at send 500: wet peak {w3:.3f} (send 1000: {wf:.3f}); channel 6 (send 0): {w5:.4f}")
 check(w3 > 0.05 and abs(w3 / wf - 0.5) < 0.1 and w5 < 0.01, "track sends: per channel and scaled (channel 4 at 500 = half of 1000; channel 6, send 0, nothing)")
 
+# after a reset: backup SRAM and SDRAM still hold the old state, but the heap is back below it; the mixer runs
+# before the graph's FX are built again, and must leave that memory (someone else's by now) alone
+uc, node = setup()
+run(uc, node, x[:320], x[:320], [(ids["CHO_ON"], 1)])
+p_ = u32(uc, 0x38800FA4); top = u32(uc, HEAP)
+before = bytes(uc.mem_read(p_, 0x400))
+w32(uc, HEAP, p_ + 0x100)
+uc.mem_write(CH + 20, struct.pack("<IIIIBBxx", 32, 32, CL, CR, 0, 1))
+uc.mem_write(0x2407F000, struct.pack("<II", BUS(12), CTX))
+snap = bytes(uc.mem_read(p_, 0x200000))
+call(uc, s7["sfx_strip"], 0x24053000, BUS(0), 0, CH)
+check(bytes(uc.mem_read(p_, 0x200000)) == snap, "after a reset, before the graph is rebuilt: sfx_strip leaves the old state's memory alone")
+w32(uc, HEAP, top)
+
 # all three: cost
 uc, node = setup()
 x = [0.3 * math.sin(2 * math.pi * 330 * i / 48000) for i in range(3200)]

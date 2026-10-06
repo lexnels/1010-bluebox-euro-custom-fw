@@ -52,3 +52,5 @@ PATCHES = [
     (0x0812F590, bl(0x0812F590, 0x0812F398), bl(0x0812F590, s4["ts_row"])),
     (0x0812F51C, u32(0x0814E280), u32(0x38800FE8)),
 ]
+if os.environ.get("SFX_NO_TRACK_PAGE"):     # a diagnostic build: the sends without the track screen page
+    PATCHES = [p for p in PATCHES if p[0] not in (0x0812471E, 0x0812472A, 0x081356A8, 0x0812F8EC, 0x0812F590, 0x0812F51C)]
