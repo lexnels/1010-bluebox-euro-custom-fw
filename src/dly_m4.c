@@ -16,6 +16,8 @@ typedef void (*def_fn)(void *table, unsigned id, unsigned type, const char *labe
 typedef void (*def_list_fn)(void *table, unsigned id, const char *label, const char *const *names, int count, const char *key);
 #define fw_def_list ((def_list_fn)0x08135db5)
 static const char *const usb_out_names[2] = { "Multichannel", "Master only" };
+#include "sfx_ids.h"
+static void sfx_reset(void);
 
 void dly_defs(void *table, unsigned id, unsigned type, const char *label, int min, int max, const char *key)
 {
@@ -26,6 +28,24 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, 0x4b, TOGGLE, "Pitch:", 0, 1, "dlypitchon");
     fw_def(table, 0x43, KNOB, "Saturate:", 0, 1000, "mstdrive");     /* master saturator (patches/master.py) */
     fw_def_list(table, 0x59, "USB Out:", usb_out_names, 2, "usbout"); /* USB audio out mode (patches/usb.py) */
+    /* send FX (patches/sfx.py) */
+    fw_def(table, SFX_CHO_ON, TOGGLE, "On:", 0, 1, "chorus_on");
+    fw_def(table, SFX_CHO_SEND, KNOB, "Send:", 0, 1000, "chorus_send");
+    fw_def(table, SFX_CHO_MODE, INT, "Mode:", 1, 3, "chorus_mode");
+    fw_def(table, SFX_CHO_LEVEL, KNOB, "Level:", 0, 1000, "chorus_level");
+    fw_def(table, SFX_DRV_ON, TOGGLE, "On:", 0, 1, "drive_on");
+    fw_def(table, SFX_DRV_SEND, KNOB, "Send:", 0, 1000, "drive_send");
+    fw_def(table, SFX_DRV_DRIVE, KNOB, "Drive:", 0, 1000, "drive_drive");
+    fw_def(table, SFX_DRV_TONE, KNOB, "Tone:", 0, 1000, "drive_tone");
+    fw_def(table, SFX_DRV_LEVEL, KNOB, "Level:", 0, 1000, "drive_level");
+    fw_def(table, SFX_D2_ON, TOGGLE, "On:", 0, 1, "delay2_on");
+    fw_def(table, SFX_D2_SEND, KNOB, "Send:", 0, 1000, "delay2_send");
+    fw_def(table, SFX_D2_TIME, KNOB, "Time:", 0, 1000, "delay2_time");
+    fw_def(table, SFX_D2_FB, KNOB, "Feedback:", 0, 1000, "delay2_fb");
+    fw_def(table, SFX_D2_TONE, KNOB, "Tone:", 0, 1000, "delay2_tone");
+    fw_def(table, SFX_D2_PING, TOGGLE, "Ping:", 0, 1, "delay2_ping");
+    fw_def(table, SFX_D2_LEVEL, KNOB, "Level:", 0, 1000, "delay2_level");
+    sfx_reset();                    /* at boot the FX button starts from the reverb itself */
 }
 
 /* Master saturator Drive (0x43) in the global set (FUN_0812060c case 2), so edits are kept, saved with the project and
@@ -97,4 +117,123 @@ void dly_layout(uint8_t *p)
 {
     fw_layout(p);
     place(p, *(short *)(p + P_SLOT));
+}
+
+/*
+ * Send FX panels. The FX button (dispatcher FUN_081244ac, button 4) cycles views 0xe (FX1 delay) -> 0x10 (FX2 reverb)
+ * -> 0x13 -> 0xe; views 0xe/0x10 show the FX panel for slot 0x14/0x15. We give the reverb view three more turns:
+ * Chorus, Drive and Delay 2 are the reverb panel showing other params of the reverb slot's set, picked by the mode
+ * below. Their params are in that set (added after the reverb's own), so edits are kept, saved with the project and
+ * sent to the M7 like the reverb's; the panel's list (FUN_081227f0) is filtered by mode.
+ */
+struct sfx_ui { uint32_t magic; uint32_t mode; };     /* 0 reverb, 1 chorus, 2 drive, 3 delay 2 */
+#define SU ((volatile struct sfx_ui *)0x38800fe0u)    /* own 32-byte line, M4 only */
+#define SU_MAGIC 0x49555846u
+#define RCC_AHB4ENR_M4 (*(volatile uint32_t *)0x580244e0u)
+#define PWR_CR1_M4 (*(volatile uint32_t *)0x58024800u)
+
+static void su_write(uint32_t mode)
+{
+    RCC_AHB4ENR_M4 |= 1u << 28;
+    (void)RCC_AHB4ENR_M4;
+    PWR_CR1_M4 |= 1u << 8;
+    SU->mode = mode;
+    SU->magic = SU_MAGIC;
+}
+static uint32_t su_mode(void)
+{
+    RCC_AHB4ENR_M4 |= 1u << 28;
+    (void)RCC_AHB4ENR_M4;
+    return SU->magic == SU_MAGIC && SU->mode <= 3 ? SU->mode : 0;
+}
+static void sfx_reset(void) { su_write(0); }
+
+/* the panel order: knobs fill columns of 2, encoders take 4 at a time */
+static const int16_t SFX_IDS[] = {
+    SFX_CHO_SEND, 1000, SFX_CHO_LEVEL, 1000, SFX_CHO_MODE, 1, SFX_CHO_ON, 0,
+    SFX_DRV_SEND, 1000, SFX_DRV_LEVEL, 500, SFX_DRV_DRIVE, 500, SFX_DRV_TONE, 600, SFX_DRV_ON, 0,
+    SFX_D2_SEND, 500, SFX_D2_LEVEL, 700, SFX_D2_TIME, 700, SFX_D2_FB, 400, SFX_D2_TONE, 600, SFX_D2_PING, 0, SFX_D2_ON, 0,
+};
+static int sfx_of(unsigned id)      /* which FX an id belongs to, 0 for none */
+{
+    if (id >= SFX_CHO_ON && id <= SFX_CHO_LEVEL) return 1;
+    if (id == SFX_DRV_ON || id == SFX_DRV_SEND || (id >= SFX_DRV_DRIVE && id <= SFX_DRV_LEVEL)) return 2;
+    if (id >= SFX_D2_ON && id <= SFX_D2_LEVEL) return 3;
+    return 0;
+}
+
+/* After the reverb set's own adds (the hall table loop's exit @0x08120c34 comes here through sfx_rv_tail). */
+void sfx_rv_add(void *set)
+{
+    for (unsigned i = 0; i < sizeof SFX_IDS / sizeof SFX_IDS[0]; i += 2)
+        fw_add(set, (uint16_t)SFX_IDS[i], SFX_IDS[i + 1]);
+}
+__attribute__((naked)) void sfx_rv_tail(void)
+{
+    __asm volatile(
+        "mov r0, r4\n"              /* the set; r4 and r5 survive the call, as the common tail needs */
+        "bl sfx_rv_add\n"
+        "movw r3, #0x088d\n"
+        "movt r3, #0x0812\n"
+        "bx r3\n");                 /* the common tail of FUN_0812060c @0x0812088c */
+}
+
+/* bl FUN_081227f0 @0x0812bcca (the panel's list): only the current FX's params on the reverb panel */
+typedef int (*list_fn)(void *app, uint16_t *slot, uint32_t *out);
+#define fw_list ((list_fn)0x081227f1)
+int sfx_list(void *app, uint16_t *slot, uint32_t *out)
+{
+    int ret = fw_list(app, slot, out);
+    if (*slot != 0x15)
+        return ret;
+    int mode = (int)su_mode();
+    uint32_t n = out[0], k = 0;     /* entries of 12 bytes from out + 4: u16 id, ..., value at +8 */
+    for (uint32_t i = 0; i < n; i++) {
+        unsigned id = *(uint16_t *)(out + 1 + 3 * i);
+        if (sfx_of(id) != mode)
+            continue;
+        if (k != i)
+            for (int w = 0; w < 3; w++)
+                out[1 + 3 * k + w] = out[1 + 3 * i + w];
+        k++;
+    }
+    out[0] = k;
+    return ret;
+}
+
+/* bl FUN_081427e2 @0x0812bcac / @0x0812bcb8: the reverb panel's titles "FX2" and "Reverb" */
+typedef void (*text_fn)(void *w, const char *s);
+#define fw_text ((text_fn)0x081427e3)
+void sfx_title(void *w, const char *s)
+{
+    static const char *const t[4] = { 0, "FX3", "FX4", "FX5" };
+    uint32_t m = su_mode();
+    fw_text(w, m ? t[m] : s);
+}
+void sfx_name(void *w, const char *s)
+{
+    static const char *const t[4] = { 0, "Chorus", "Drive", "Delay 2" };
+    uint32_t m = su_mode();
+    fw_text(w, m ? t[m] : s);
+}
+
+/* The FX button's calls FUN_08123158(app, view, 0, 0): from the delay to the reverb (@0x081247d8), and from the
+ * reverb on (@0x081247e4, to view 0x13): the reverb view comes back three times, as Chorus, Drive and Delay 2. */
+typedef void (*view_fn)(void *app, unsigned view, int a, int b);
+#define fw_view ((view_fn)0x08123159)
+void sfx_to_reverb(void *app, unsigned view, int a, int b)
+{
+    su_write(0);
+    fw_view(app, view, a, b);
+}
+void sfx_from_reverb(void *app, unsigned view, int a, int b)
+{
+    uint32_t m = su_mode();
+    if (m < 3) {
+        su_write(m + 1);
+        fw_view(app, 0x10, a, b);
+    } else {
+        su_write(0);
+        fw_view(app, view, a, b);
+    }
 }
