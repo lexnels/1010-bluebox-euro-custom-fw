@@ -59,7 +59,7 @@ struct sfx {
     /* params, as the M4 sends them */
     int32_t cho_on, cho_fx1, cho_fx2, cho_mode, cho_level, cho_rate, cho_depth, cho_width;
     int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
-    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync;
+    int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync, d2_rev;
     float bpm;                                                  /* the tempo d2_tgt was worked out for */
     float ts[3][NCH];                                           /* track sends, 0..1, per FX and channel */
     uint32_t act;                                               /* bit per FX: running, so it wants input */
@@ -70,13 +70,14 @@ struct sfx {
     float cho_pre, cho_postl, cho_postr, cho_g, cho_gt;
     uint32_t cho_wp, cho_quiet;
     /* drive */
-    float drv_gain, drv_k, drv_lp, drv_g, drv_gt;
+    float drv_gain, drv_k, drv_lp, drv_g, drv_gt, drv_g2;
     float drv_hpl[2], drv_hpr[2], drv_lpl, drv_lpr;
     uint32_t drv_quiet;
     /* delay 2 */
     float d2_cur, d2_tgt, d2_fbg, d2_lp, d2_g, d2_gt;
     float d2_lpl, d2_lpr, d2_hpl[2], d2_hpr[2];
     uint32_t d2_wp, d2_clear;
+    uint32_t d2_seg, d2_j, d2_T, d2_rng, d2_isrev;               /* Reverse: this repeat's length, where in it, backwards? */
     float cho_buf[CHO_N];
     int16_t d2_l[D2_N], d2_r[D2_N];                             /* +-1 as +-32767 (sat keeps them in range) */
 };
@@ -122,12 +123,23 @@ static float warm(float x)
     return x >= 0.f ? sat(x) : 0.6f * sat(x * (1.f / 0.6f));
 }
 
+/* the drive's curve: the biased, uneven clipper (even harmonics, warmth), then on the top half a harder one */
+static inline __attribute__((always_inline)) float drv_curve(float gain, float g2, float sb, float x)
+{
+    float v = warm(gain * x + 0.3f) - sb;
+    return g2 > 1.f ? sat(g2 * v) : v;
+}
+static float drv_stage(const struct sfx *s, float x)
+{
+    return drv_curve(s->drv_gain, s->drv_g2, warm(0.3f), x);
+}
+
 static void defaults(struct sfx *s)
 {
     s->cho_on = 0; s->cho_fx1 = 0; s->cho_fx2 = 0; s->cho_mode = 0; s->cho_level = 1000; s->cho_rate = 500; s->cho_depth = 500; s->cho_width = 500;
     s->drv_on = 0; s->drv_fx1 = 0; s->drv_fx2 = 0; s->drv_drive = 500; s->drv_tone = 600; s->drv_level = 500;
     s->d2_on = 0; s->d2_fx1 = 0; s->d2_fx2 = 0; s->d2_time = 700; s->d2_fb = 400; s->d2_tone = 600; s->d2_ping = 0; s->d2_level = 700;
-    s->d2_beat = 0; s->d2_sync = 8;
+    s->d2_beat = 0; s->d2_sync = 8; s->d2_rev = 0;
     s->bpm = 120.f;
 }
 
@@ -146,8 +158,9 @@ static void update(struct sfx *s)
     s->cho_gt = s->cho_on ? 1.f : 0.f;
 
     float d = s->drv_drive * 0.001f;
-    s->drv_gain = exp2f_(6.f * d);                                    /* 0 .. +36 dB into the clipper */
-    float up = warm(0.25f * s->drv_gain + 0.3f) - warm(0.3f), dn = warm(0.3f) - warm(0.3f - 0.25f * s->drv_gain);
+    s->drv_gain = exp2f_(6.f * d + 4.f * d * d);                      /* 0 .. +24 dB (500) .. +60 dB into the clipper */
+    s->drv_g2 = 1.f + 6.f * (d > 0.5f ? 2.f * d - 1.f : 0.f);         /* the top half: a second, harder stage (x1 .. x7) */
+    float up = drv_stage(s, 0.25f), dn = -drv_stage(s, -0.25f);
     s->drv_k = 0.25f / (up > dn ? up : dn);                           /* -12 dBFS peaks stay put as Drive rises */
     s->drv_lp = lp_coef(500.f * exp2f_(5.3f * s->drv_tone * 0.001f));   /* 500 Hz .. 20 kHz */
     s->drv_gt = s->drv_on ? 1.f : 0.f;
@@ -232,6 +245,7 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     case SFX_D2_LEVEL: s->d2_level = v; break;
     case SFX_D2_BEAT: s->d2_beat = v; break;
     case SFX_D2_SYNC: s->d2_sync = v; break;
+    case SFX_D2_REV: s->d2_rev = v; break;
     default: return 0;
     }
     return 1;
@@ -280,14 +294,14 @@ static void chorus(struct sfx *s, const float *il, const float *ir, float *wl, f
 static void drive(struct sfx *s, const float *il, const float *ir, float *wl, float *wr, unsigned n)
 {
     const float send = 1.f;
-    float gain = s->drv_gain, k = s->drv_k, a = s->drv_lp;
-    const float bias = 0.3f, sb = warm(bias);      /* the bias and the uneven curve: even harmonics, warmth */
+    float k = s->drv_k, a = s->drv_lp, gain = s->drv_gain, g2 = s->drv_g2;
+    const float sb = warm(0.3f);
     for (unsigned i = 0; i < n; i++) {
         float x[2] = { il[i] * send, ir[i] * send };
         float y[2];
         float *hp[2] = { s->drv_hpl, s->drv_hpr }, *lp[2] = { &s->drv_lpl, &s->drv_lpr };
         for (int c = 0; c < 2; c++) {
-            float v = warm(gain * x[c] + bias) - sb;
+            float v = drv_curve(gain, g2, sb, x[c]);
             float h = v - hp[c][0] + 0.995f * hp[c][1];     /* DC blocker, ~40 Hz */
             hp[c][0] = v;
             hp[c][1] = h;
@@ -324,9 +338,32 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, 
     float fb = s->d2_fbg, a = s->d2_lp, cur = s->d2_cur;
     uint32_t wp = s->d2_wp;
     int ping = s->d2_ping;
+    /* Reverse: time is cut into repeats of one delay time each; at each repeat's start a die (xorshift) decides
+     * whether it plays the last repeat's worth backwards: read from 1 to 2 delay times back, the read point walking
+     * back while the write point walks on. Faded in and out against the forward read over 2 ms, so no clicks. It
+     * sits in the loop, so the feedback carries reversed repeats on (and rolls again on each pass). */
+    uint32_t chance = s->d2_rev <= 0 ? 0u : s->d2_rev >= 1000 ? 0xffffffffu : (uint32_t)s->d2_rev * 4294967u;
+    uint32_t seg = s->d2_seg, j = s->d2_j, T = s->d2_T, rev = s->d2_isrev, rng = s->d2_rng ? s->d2_rng : 0x9e3779b9u;
     for (unsigned i = 0; i < n; i++) {
         cur += 0.0002f * (s->d2_tgt - cur);             /* time changes glide, tape style (~100 ms) */
         float wl = d2_read(s->d2_l, wp, cur), wr = d2_read(s->d2_r, wp, cur);
+        if (!(chance | rev)) {                          /* Reverse at 0: nothing to do (the next repeat starts afresh) */
+        } else if (j >= seg) {                          /* a new repeat */
+            T = (uint32_t)cur;
+            seg = T;
+            j = 0;
+            rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+            rev = chance && rng <= chance && 2 * T + 4 < D2_N && T > 4 * 96;
+        }
+        if (rev) {                                      /* (j < seg = T here) */
+            int32_t e = (int32_t)(j < T - j ? j : T - j);           /* to the nearer edge */
+            float g = e >= 96 ? 1.f : (float)e * (1.f / 96.f);
+            float d = (float)(2 * j + 1);
+            float rl = d2_read(s->d2_l, wp, d), rr = d2_read(s->d2_r, wp, d);
+            wl += g * (rl - wl);
+            wr += g * (rr - wr);
+        }
+        j++;
         s->d2_lpl += a * (wl - s->d2_lpl);
         s->d2_lpr += a * (wr - s->d2_lpr);
         float fl = s->d2_lpl - s->d2_hpl[0] + 0.99f * s->d2_hpl[1];   /* ~80 Hz high-pass in the loop */
@@ -348,6 +385,7 @@ static void delay2(struct sfx *s, const float *il, const float *ir, float *wl_, 
         wr_[i] = wr;
     }
     s->d2_cur = cur; s->d2_wp = wp;
+    s->d2_seg = seg; s->d2_j = j; s->d2_T = T; s->d2_isrev = rev; s->d2_rng = rng;
 }
 
 /* An FX's wet output into the main mix (Level) and into the delay's and reverb's send buses (FX1 Send, FX2 Send);
