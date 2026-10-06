@@ -3,9 +3,11 @@
  *
  * The mixer sums the channels into bus 12 and their FX1/FX2 sends into bus 13 (the delay) and bus 14 (the reverb);
  * the graph then runs the reverb, the delay (each wet-only, in place on its bus) and node 0x30, which adds both
- * returns into bus 12. sfx_process runs first, in the reverb's vtable slot (0x0806adac, ahead of hall_process): each
- * FX takes the dry mix in bus 12 (for now; per-track sends are to come), and its output goes into bus 12 (Level) and
- * into the delay's and reverb's buses (FX1 Send, FX2 Send) before they run. So the FX are in the main out, the master
+ * returns into bus 12. Each channel also has a send to each of our FX (the track sends, on a third track screen
+ * page): sfx_strip, around the mixer's per-channel call, adds the channel's post-fader signal times its sends into
+ * our three inputs. sfx_process runs next, in the reverb's vtable slot (0x0806adac, ahead of hall_process): each FX
+ * takes its input, and its output goes into bus 12 (Level) and into the delay's and reverb's buses (FX1 Send, FX2
+ * Send) before they run. So the FX are in the main out, the master
  * compressor and saturator, and recordings of the main mix.
  *
  * Params (src/sfx_ids.h) come with the reverb slot's messages; the M7 copies every message to the master queue (0xc),
@@ -27,6 +29,7 @@ typedef int (*event_fn)(void *queue, unsigned index, void *event);
 typedef void (*stereo_fn)(void *bus, float **l, float **r);
 typedef void *(*ctor_fn)(void *obj);
 typedef uint32_t (*alloc_fn)(uint32_t size);
+typedef void (*strip_fn)(void *mixer, void *in, unsigned idx, float *ch, void *main, void *ctx);
 #define fw_reverb   ((process_fn)FN(HALL_PROCESS))     /* hall_process (src/hall_m7.c), from build.sh */
 #define fw_dly_ctor ((ctor_fn)FN(0x08052e30))
 #define fw_alloc    ((alloc_fn)FN(0x080413d0))
@@ -35,13 +38,15 @@ typedef uint32_t (*alloc_fn)(uint32_t size);
 #define fw_queue    ((queue_fn)FN(0x08053c8c))
 #define fw_next_ev  ((event_fn)FN(0x0804e938))
 #define fw_stereo   ((stereo_fn)FN(0x0804d598))
+#define fw_strip    ((strip_fn)FN(0x0805012c))     /* the mixer's per-channel process (FUN_08050564 calls it) */
 #define HEAP_TOP    (*(volatile uint32_t *)0x24000004u)    /* FUN_080413d0's SDRAM bump pointer */
 
-struct fw_ev { uint8_t type, _p0[11]; uint16_t id, _p1; int32_t value; uint32_t _p2; };
+struct fw_ev { uint8_t type, _p0[7]; uint32_t target; uint16_t id, _p1; int32_t value; uint32_t _p2; };
 struct bus { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo; };
 
 #define FS 48000.f
 #define MAXN 32u
+#define NCH 12u
 #define CHO_N 1024u                 /* 21 ms */
 #define D2_N 262144u                /* 5.46 s: a bar at 45 BPM */
 #define D2_CLEAR 4096u              /* samples per side cleared per block after switching on */
@@ -55,6 +60,10 @@ struct sfx {
     int32_t drv_on, drv_fx1, drv_fx2, drv_drive, drv_tone, drv_level;
     int32_t d2_on, d2_fx1, d2_fx2, d2_time, d2_fb, d2_tone, d2_ping, d2_level, d2_beat, d2_sync;
     float bpm;                                                  /* the tempo d2_tgt was worked out for */
+    float ts[3][NCH];                                           /* track sends, 0..1, per FX and channel */
+    uint32_t act;                                               /* bit per FX: running, so it wants input */
+    uint32_t has;                                               /* bit per FX: input this block */
+    float in[3][2][MAXN];                                       /* the FX inputs, summed by sfx_strip */
     /* chorus */
     float cho_ph, cho_inc, cho_ctr, cho_dep;                    /* LFO phase 0..1, per sample; delay in samples */
     float cho_pre, cho_postl, cho_postr, cho_g, cho_gt;
@@ -212,6 +221,12 @@ static int set(struct sfx *s, unsigned id, int32_t v)
     return 1;
 }
 
+static void set_ts(struct sfx *s, unsigned id, unsigned ch, int32_t v)
+{
+    if (ch < NCH && id >= SFX_TS_CHO && id <= SFX_TS_D2)
+        s->ts[id - SFX_TS_CHO][ch] = (v < 0 ? 0 : v > 1000 ? 1000 : v) * 0.001f;
+}
+
 /* Each FX writes its wet output into wl, wr. */
 static void chorus(struct sfx *s, const float *il, const float *ir, float *wl, float *wr, unsigned n)
 {
@@ -345,8 +360,12 @@ unsigned sfx_process(void *obj, void *ctx)
     struct fw_ev ev;
     int changed = 0;
     for (unsigned i = 0; fw_next_ev(q, i, &ev); i++)
-        if (ev.type == 0x39)
-            changed |= set(s, ev.id, ev.value);
+        if (ev.type == 0x39) {
+            if (ev.id >= SFX_TS_CHO && ev.id <= SFX_TS_D2)
+                set_ts(s, ev.id, ev.target, ev.value);
+            else
+                changed |= set(s, ev.id, ev.value);
+        }
     if (s->d2_beat) {               /* the song tempo, as the stock delay reads it (FUN_08053234: ctx[0] + 0x18) */
         float bpm = *(volatile float *)(*(uint8_t **)ctx + 0x18);
         if (!(bpm >= 20.f && bpm <= 400.f)) bpm = 120.f;
@@ -355,27 +374,27 @@ unsigned sfx_process(void *obj, void *ctx)
     if (changed)
         update(s);
     int cho = s->cho_on || s->cho_g > 1e-4f, drv = s->drv_on || s->drv_g > 1e-4f, d2 = s->d2_on || s->d2_g > 1e-4f;
+    uint32_t has = s->has;
+    s->has = 0;
+    s->act = (cho ? 1u : 0u) | (drv ? 2u : 0u) | (d2 ? 4u : 0u);   /* sfx_strip fills only these, from next block */
     if (!cho && !drv && !d2)
         return fw_reverb(obj, ctx);
 
     struct bus *b = fw_bus(ctx, 12);
     unsigned n = fw_frames(b);
     if (n > MAXN) n = MAXN;
-    /* a silent mix: chorus and drive have nothing to do once their short tails are out (the delay always runs) */
-    if (b->silent) {
-        if (cho && ++s->cho_quiet > CHO_N / MAXN) cho = 0;
-        if (drv && ++s->drv_quiet > 4) drv = 0;
-        if (!cho && !drv && !d2)
-            return fw_reverb(obj, ctx);
-    } else
-        s->cho_quiet = s->drv_quiet = 0;
+    /* no input: chorus and drive have nothing to do once their short tails are out (the delay always runs) */
+    if (has & 1) s->cho_quiet = 0; else if (cho && ++s->cho_quiet > CHO_N / MAXN) cho = 0;
+    if (has & 2) s->drv_quiet = 0; else if (drv && ++s->drv_quiet > 4) drv = 0;
+    if (!cho && !drv && !d2)
+        return fw_reverb(obj, ctx);
+    for (unsigned f = 0; f < 3; f++)    /* an FX with no input this block runs on silence */
+        if (!(has >> f & 1))
+            for (unsigned i = 0; i < n; i++)
+                s->in[f][0][i] = s->in[f][1][i] = 0.f;
     struct dest d;
     fw_stereo(b, &d.l12, &d.r12);       /* zero-filled if it was silent */
-    float il[MAXN], ir[MAXN], wl[MAXN], wr[MAXN];
-    for (unsigned i = 0; i < n; i++) {  /* the dry mix, before any FX adds to it */
-        il[i] = d.l12[i];
-        ir[i] = d.r12[i];
-    }
+    float wl[MAXN], wr[MAXN];
     /* the send buses only when something goes to them (fw_stereo wakes a silent bus, and its FX with it) */
     int to13 = (cho && s->cho_fx1) || (drv && s->drv_fx1) || (d2 && s->d2_fx1);
     int to14 = (cho && s->cho_fx2) || (drv && s->drv_fx2) || (d2 && s->d2_fx2);
@@ -383,16 +402,42 @@ unsigned sfx_process(void *obj, void *ctx)
     if (to13) fw_stereo(fw_bus(ctx, 13), &d.l13, &d.r13);
     if (to14) fw_stereo(fw_bus(ctx, 14), &d.l14, &d.r14);
     if (cho) {
-        chorus(s, il, ir, wl, wr, n);
+        chorus(s, s->in[0][0], s->in[0][1], wl, wr, n);
         out(&d, &s->cho_g, s->cho_gt, s->cho_level, s->cho_fx1, s->cho_fx2, wl, wr, n);
     }
     if (drv) {
-        drive(s, il, ir, wl, wr, n);
+        drive(s, s->in[1][0], s->in[1][1], wl, wr, n);
         out(&d, &s->drv_g, s->drv_gt, s->drv_level, s->drv_fx1, s->drv_fx2, wl, wr, n);
     }
     if (d2) {
-        delay2(s, il, ir, wl, wr, n);
+        delay2(s, s->in[2][0], s->in[2][1], wl, wr, n);
         out(&d, &s->d2_g, s->d2_gt, s->d2_level, s->d2_fx1, s->d2_fx2, wl, wr, n);
     }
     return fw_reverb(obj, ctx);
+}
+
+/* Replaces the mixer's bl FUN_0805012c @0x0805070a (per channel, before our FX run): the channel as stock, then its
+ * post-fader signal (the bus at ch + 20, after fader, pan and mute) times its track sends into the FX inputs. */
+void sfx_strip(void *mixer, void *in, unsigned idx, float *ch, void *mainb, void *ctx)
+{
+    fw_strip(mixer, in, idx, ch, mainb, ctx);
+    struct sfx *s = SP->s;              /* backup SRAM is on: sfx_ctor enabled it at graph build */
+    if (SP->magic != SFX_MAGIC || !s || s->magic != SFX_MAGIC || !s->act || idx >= NCH)
+        return;
+    struct bus *b = (struct bus *)((uint8_t *)ch + 20);
+    if (b->silent || !b->l)
+        return;
+    unsigned n = b->frames > MAXN ? MAXN : b->frames;
+    const float *l = b->l, *r = b->stereo && b->r ? b->r : b->l;
+    for (unsigned f = 0; f < 3; f++) {
+        float g = s->ts[f][idx];
+        if (!(s->act >> f & 1) || g <= 0.f)
+            continue;
+        float *il = s->in[f][0], *ir = s->in[f][1];
+        if (s->has >> f & 1)
+            for (unsigned i = 0; i < n; i++) { il[i] += g * l[i]; ir[i] += g * r[i]; }
+        else
+            for (unsigned i = 0; i < n; i++) { il[i] = g * l[i]; ir[i] = g * r[i]; }
+        s->has |= 1u << f;
+    }
 }

@@ -1,5 +1,5 @@
 """Send FX: a Juno-style chorus, a warm drive and a second delay, each with its own on/off, reached by pressing FX
-after the delay and the reverb.
+after the delay and the reverb, fed by per-channel track sends on a third track screen page.
 
 M7 code is src/sfx_m7.c (cave out/sfx7), M4 code is in src/dly_m4.c (out/dly4). Needs the hall patchset (its reverb
 list loop is where the new params join the reverb slot's set) and the delay patchset (dly4 cave, param definitions).
@@ -37,4 +37,18 @@ PATCHES = [
     # M4: the FX button, delay -> reverb and reverb -> view 0x13 (bl FUN_08123158) -> through Chorus, Drive, Delay 2
     (0x081247D8, bl(0x081247D8, 0x08123158), bl(0x081247D8, s4["sfx_to_reverb"])),
     (0x081247E4, bl(0x081247E4, 0x08123158), bl(0x081247E4, s4["sfx_from_reverb"])),
+    # Track sends. M7: the mixer's per-channel call (bl FUN_0805012c) -> sfx_strip, which adds each channel's track
+    # sends into the FX inputs
+    (0x0805070A, bl(0x0805070A, 0x0805012C), bl(0x0805070A, s7["sfx_strip"])),
+    # M4: the channel set's last add (bl FUN_081205e2, id 0x173) -> ts_set_add, which adds the three sends
+    (0x08120888, bl(0x08120888, 0x081205E2), bl(0x08120888, s4["ts_set_add"])),
+    # M4: the track screen's page button (button 0), view 2 -> 3 and 3 -> 2 -> through our page (view 3, our rows)
+    (0x0812471E, bl(0x0812471E, 0x08123158), bl(0x0812471E, s4["ts_to_page2"])),
+    (0x0812472A, bl(0x0812472A, 0x08123158), bl(0x0812472A, s4["ts_from_page2"])),
+    # M4: the track screen's setup (bl FUN_0812f604, on showing it and on a redraw) -> ts_page; its row pick (bl
+    # FUN_0812f398) -> ts_row; its second page's row table (literal 0x0814e280) -> the copy in backup SRAM
+    (0x081356A8, bl(0x081356A8, 0x0812F604), bl(0x081356A8, s4["ts_page"])),
+    (0x0812F8EC, bl(0x0812F8EC, 0x0812F604), bl(0x0812F8EC, s4["ts_page"])),
+    (0x0812F590, bl(0x0812F590, 0x0812F398), bl(0x0812F590, s4["ts_row"])),
+    (0x0812F51C, u32(0x0814E280), u32(0x38800FE8)),
 ]

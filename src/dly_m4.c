@@ -54,6 +54,10 @@ void dly_defs(void *table, unsigned id, unsigned type, const char *label, int mi
     fw_def(table, SFX_D2_LEVEL, KNOB, "Level:", 0, 1000, "delay2_level");
     fw_def(table, SFX_D2_BEAT, TOGGLE, "Beat Sync:", 0, 1, "delay2_beat");
     fw_def_list(table, SFX_D2_SYNC, "Time:", SYNC_NAMES, 12, "delay2_sync");
+    /* track sends, per channel (type 8 0..1000 like FX1 0xda) */
+    fw_def(table, SFX_TS_CHO, KNOB, "FX3:", 0, 1000, "chorus_send");
+    fw_def(table, SFX_TS_DRV, KNOB, "FX4:", 0, 1000, "drive_send");
+    fw_def(table, SFX_TS_D2, KNOB, "FX5:", 0, 1000, "delay2_send");
     sfx_reset();                    /* at boot the FX button starts from the reverb itself */
 }
 
@@ -135,7 +139,12 @@ void dly_layout(uint8_t *p)
  * below. Their params are in that set (added after the reverb's own), so edits are kept, saved with the project and
  * sent to the M7 like the reverb's; the panel's list (FUN_081227f0) is filtered by mode.
  */
-struct sfx_ui { uint32_t magic; uint32_t mode; };     /* 0 reverb, 1 chorus, 2 drive, 3 delay 2 */
+struct sfx_ui {
+    uint32_t magic;
+    uint32_t mode;                  /* the FX button: 0 reverb, 1 chorus, 2 drive, 3 delay 2 */
+    uint16_t rows[6];               /* the track screen's second page's param per row (stock 0x0814e280, or ours) */
+    uint32_t page3;                 /* the track screen's second page shows our sends (its third page) */
+};
 #define SU ((volatile struct sfx_ui *)0x38800fe0u)    /* own 32-byte line, M4 only */
 #define SU_MAGIC 0x49555846u
 #define RCC_AHB4ENR_M4 (*(volatile uint32_t *)0x580244e0u)
@@ -147,6 +156,8 @@ static void su_write(uint32_t mode)
     (void)RCC_AHB4ENR_M4;
     PWR_CR1_M4 |= 1u << 8;
     SU->mode = mode;
+    if (SU->magic != SU_MAGIC)
+        SU->page3 = 0;
     SU->magic = SU_MAGIC;
 }
 static uint32_t su_mode(void)
@@ -155,7 +166,13 @@ static uint32_t su_mode(void)
     (void)RCC_AHB4ENR_M4;
     return SU->magic == SU_MAGIC && SU->mode <= 3 ? SU->mode : 0;
 }
-static void sfx_reset(void) { su_write(0); }
+static void sfx_reset(void)
+{
+    su_write(0);
+    SU->page3 = 0;
+    for (int i = 0; i < 6; i++)
+        SU->rows[i] = ((const uint16_t *)0x0814e280)[i];
+}
 
 /* the panel order: knobs fill columns of 2, encoders take 4 at a time */
 static const int16_t SFX_IDS[] = {
@@ -251,4 +268,88 @@ void sfx_from_reverb(void *app, unsigned view, int a, int b)
         su_write(0);
         fw_view(app, view, a, b);
     }
+}
+
+/*
+ * Track sends. Each channel's set (FUN_0812060c case 1) gets three more params, so they are kept, saved with the
+ * project and sent to the M7 with the channel's slot like FX1/FX2 (src/sfx_m7.c sums them).
+ *
+ * The track screen (views 2 and 3, page app+0x558) shows one row's param for every channel; view 2 has Vol, Gain,
+ * Solo, Mute, Rec, view 3 Pan, FX1, FX2, CUE, OUT3, OUT4 (FUN_0812f604 sets the labels, FUN_0812f398 picks a row from
+ * the table at 0x0814e280 for view 3). Its page button (button 0) toggles 2 <-> 3; we add a turn: view 3 again with
+ * rows FX3, FX4, FX5 (our sends), from a table in backup SRAM that the literal @0x0812f51c now points to.
+ */
+void ts_set_add(void *set, unsigned id, int value)    /* the channel set's last add (bl @0x08120888, id 0x173) */
+{
+    fw_add(set, id, value);
+    fw_add(set, SFX_TS_CHO, 0);
+    fw_add(set, SFX_TS_DRV, 0);
+    fw_add(set, SFX_TS_D2, 0);
+}
+
+static uint32_t ts_page3(void)
+{
+    su_mode();                      /* backup SRAM on */
+    return SU->magic == SU_MAGIC && SU->page3 == 1;
+}
+static void ts_set_page3(uint32_t on)
+{
+    su_mode();
+    if (SU->magic != SU_MAGIC)
+        su_write(0);
+    SU->page3 = on;
+}
+
+/* button 0: view 2 -> 3 (@0x0812471e) and 3 -> 2 (@0x0812472a), with our page between 3 and 2 */
+void ts_to_page2(void *app, unsigned view, int a, int b)
+{
+    ts_set_page3(0);
+    fw_view(app, view, a, b);
+}
+void ts_from_page2(void *app, unsigned view, int a, int b)
+{
+    if (!ts_page3()) {
+        ts_set_page3(1);
+        fw_view(app, 3, a, b);      /* view 3 again, now with our rows */
+    } else {
+        ts_set_page3(0);
+        fw_view(app, view, a, b);
+    }
+}
+
+#define TS_SUB(p) (*(int *)((uint8_t *)(p) + 0xd26c))          /* the page shown: 0 = view 2, 1 = view 3 */
+#define TS_ROW(p, sub) (*(int *)((uint8_t *)(p) + (0x349c + (sub)) * 4))   /* the row picked on each */
+typedef void (*page_fn)(void *page, int sub);
+typedef void (*label_fn)(void *w, const char *s);
+#define fw_page ((page_fn)0x0812f605)
+#define fw_row ((page_fn)0x0812f399)
+#define fw_label ((label_fn)0x08139725)
+static const uint16_t TS_LABEL[6] = { 0xc084, 0xc124, 0xc1c4, 0xc264, 0xc304, 0xc3a4 };  /* and each + 0x3c0 */
+
+/* both bl FUN_0812f604 (@0x081356a8 on event 0x7f, @0x0812f8ec on a redraw) */
+void ts_page(void *page, int sub)
+{
+    static const uint16_t ours[6] = { SFX_TS_CHO, SFX_TS_DRV, SFX_TS_D2, 0, 0, 0 };
+    static const char *const names[6] = { "FX3", "FX4", "FX5", "", "", "" };
+    int on = ts_page3() && sub == 1;     /* (ts_page3 first: it switches backup SRAM on) */
+    for (int i = 0; i < 6; i++)
+        SU->rows[i] = on ? ours[i] : ((const uint16_t *)0x0814e280)[i];
+    if (on && (unsigned)TS_ROW(page, 1) > 2)
+        TS_ROW(page, 1) = 0;
+    fw_page(page, sub);
+    if (on) {
+        for (int i = 0; i < 6; i++) {
+            fw_label((uint8_t *)page + TS_LABEL[i], names[i]);
+            fw_label((uint8_t *)page + TS_LABEL[i] + 0x3c0, names[i]);
+        }
+        fw_row(page, TS_ROW(page, 1));      /* again: the highlight follows the labels */
+    }
+}
+
+/* bl FUN_0812f398 @0x0812f590 (a row picked): our page has three */
+void ts_row(void *page, int row)
+{
+    if (TS_SUB(page) == 1 && ts_page3() && (unsigned)row > 2)
+        return;
+    fw_row(page, row);
 }

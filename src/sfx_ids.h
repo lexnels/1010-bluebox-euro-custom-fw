@@ -25,3 +25,7 @@
 #define SFX_CHO_DEPTH 0x5b          /* 500 = the mode's own depth; 0 .. x2 */
 #define SFX_D2_BEAT   0x5c          /* Beat Sync: Time follows the tempo (SFX_D2_SYNC) */
 #define SFX_D2_SYNC   0x5d          /* the stock delay's 12 note values (1/64 .. 1 bar), its names list too */
+/* Track sends (one per channel, in each channel's set, slots 0..11): how much of the channel goes into each FX */
+#define SFX_TS_CHO    0x5e
+#define SFX_TS_DRV    0x5f
+#define SFX_TS_D2     0x60

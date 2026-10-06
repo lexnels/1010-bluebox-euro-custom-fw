@@ -70,6 +70,11 @@ check(bl_target(0x0812BC90) == s4["sfx_title"] and bl_target(0x0812BC9C) == s4["
 check(bl_target(0x080518D2) == s7["sfx_ctor"], "graph builder's delay constructor call -> sfx_ctor")
 check(bl_target(0x08120C34) == s4["sfx_rv_tail"] and bl_target(0x0812BCCA) == s4["sfx_list"], "reverb set tail and panel list -> ours")
 check(bl_target(0x081247D8) == s4["sfx_to_reverb"] and bl_target(0x081247E4) == s4["sfx_from_reverb"], "FX button: delay->reverb and reverb->next -> ours")
+check(bl_target(0x0805070A) == s7["sfx_strip"], "mixer's per-channel call -> sfx_strip")
+check(bl_target(0x08120888) == s4["ts_set_add"], "channel set's last add -> ts_set_add")
+check(bl_target(0x0812471E) == s4["ts_to_page2"] and bl_target(0x0812472A) == s4["ts_from_page2"], "track screen page button: 2->3 and 3->2 -> ours")
+check(bl_target(0x081356A8) == s4["ts_page"] and bl_target(0x0812F8EC) == s4["ts_page"] and bl_target(0x0812F590) == s4["ts_row"], "track screen setup (both calls) and row pick -> ours")
+check(struct.unpack("<I", at(0x0812F51C, 4))[0] == 0x38800FE8, "track screen page 2 row table -> backup SRAM copy")
 
 # ---- M7: allocation at graph build
 HEAP = 0x24000004
@@ -102,7 +107,9 @@ check(u32(uc, 0x38800FA4) == 0xC0010000 and u32(uc, HEAP) == p + size, "after a 
 BUS = lambda port: CTX + 0x150E4 + port * 20
 BL, BR = 0x24020000, 0x24020100
 Q = CTX + 0xC * 0x604 + 4
-revs = []
+revs, strips = [], []
+CH = 0x24052000                     # channel 0's strip struct; its post-fader bus at +20
+CL, CR = 0x24021000, 0x24021100
 def setup():
     uc = m7()
     call(uc, s7["sfx_ctor"], 0x24050000)
@@ -110,15 +117,30 @@ def setup():
     uc.mem_write(node, struct.pack("<IBBxxI", 0x0806ADA0, 0x44, 1, 0) + bytes(0x14))
     revs.clear()
     stub(uc, h7["hall_process"], revs, rv=1)      # the reverb itself: only that it runs after us
+    strips.clear()
+    stub(uc, 0x0805012C, strips)                 # the stock channel strip: its post-fader bus is ours to fill
     for port in range(19):
         uc.mem_write(BUS(port), struct.pack("<IIIIBBxx", 32, 32, 0x24030000 + port * 0x200, 0x24030100 + port * 0x200, 1, 0))
+    ts_all(uc, 1000)                # channel 0 sent fully to all three, so each FX gets the test signal
     return uc, node
-def events(uc, evs):
-    for i, (pid, val) in enumerate(evs):
-        uc.mem_write(Q + i * 24, struct.pack("<B7xIHHiI", 0x39, 0x15, pid, 0, val, 0))
+def events(uc, evs, target=0x15):
+    for i, ev in enumerate(evs):
+        pid, val = ev[:2]
+        uc.mem_write(Q + i * 24, struct.pack("<B7xIHHiI", 0x39, ev[2] if len(ev) > 2 else target, pid, 0, val, 0))
     w32(uc, Q + 0x600, len(evs))
+def ts_all(uc, v, ch=0):
+    """track sends of channel ch to all three FX: as the M4 sends them (slot = channel), read with the next block"""
+    pending.extend([(ids["TS_CHO"], v, ch), (ids["TS_DRV"], v, ch), (ids["TS_D2"], v, ch)])
+pending = []
+def strip(uc, l, r, silent=False, idx=0):
+    """the mixer's call for one channel: the stock strip (stubbed), then ours adds its sends into the FX inputs"""
+    uc.mem_write(CH + 20, struct.pack("<IIIIBBxx", 32, 32, CL, CR, 1 if silent else 0, 1))
+    uc.mem_write(CL, struct.pack("<32f", *l)); uc.mem_write(CR, struct.pack("<32f", *r))
+    uc.mem_write(0x2407F000, struct.pack("<II", BUS(12), CTX))
+    call(uc, s7["sfx_strip"], 0x24053000, BUS(idx), idx, CH)
 def block(uc, node, l, r, evs=(), silent=False):
-    events(uc, evs)
+    events(uc, list(pending) + list(evs)); pending.clear()
+    strip(uc, l, r, silent)
     uc.mem_write(BUS(12), struct.pack("<IIIIBBxx", 32, 32, BL, BR, 1 if silent else 0, 1))
     uc.mem_write(BL, struct.pack("<32f", *l)); uc.mem_write(BR, struct.pack("<32f", *r))
     n = [0]
@@ -137,6 +159,7 @@ def run(uc, node, sig_l, sig_r, evs=(), skip=0):
 
 uc, node = setup()
 sine = [0.5 * math.sin(2 * math.pi * 440 * i / 48000) for i in range(32)]
+block(uc, node, sine, sine)        # (takes the track send events)
 l, r, n = block(uc, node, sine, sine)
 print(f"     all off: {n} instructions")
 check(max(abs(a - b) for a, b in zip(l, sine)) < 1e-7 and n < 200, "all off: bus 12 untouched, cheap")
@@ -260,6 +283,37 @@ check(b13[4] == 0 and b14[4] == 0 and all(abs(a - 0.5 * w) < 1e-5 for a, w in zi
       "FX1 Send 500 / FX2 Send 1000: half and all of the chorus's output into the delay's and reverb's buses")
 check(len(revs) > 0 and revs[-1][0] == node, "the reverb (hall_process) runs after the send FX")
 
+# track sends: only what channels send reaches the FX
+uc, node = setup()
+pending.clear(); ts_all(uc, 0)
+x = [0.3 * math.sin(2 * math.pi * 330 * i / 48000) for i in range(4800)]
+l, _, _ = run(uc, node, x, x, [(ids["CHO_ON"], 1)])
+check(max(abs(a - b) for a, b in zip(l, x)) < 1e-6, "track send 0: the chorus gets nothing (the mix itself is no longer its input)")
+uc, node = setup()
+pending.clear(); ts_all(uc, 0); ts_all(uc, 500, ch=3)
+def run_ch(uc, node, sig, ch, evs=()):
+    out = []
+    for b in range(len(sig) // 32):
+        seg = sig[b*32:(b+1)*32]
+        events(uc, list(pending) + (list(evs) if b == 0 else [])); pending.clear()
+        strip(uc, seg, seg, idx=ch)
+        uc.mem_write(BUS(12), struct.pack("<IIIIBBxx", 32, 32, BL, BR, 0, 1))
+        uc.mem_write(BL, struct.pack("<32f", *seg)); uc.mem_write(BR, struct.pack("<32f", *seg))
+        call(uc, s7["sfx_process"], node, CTX)
+        w32(uc, Q + 0x600, 0)
+        out += list(struct.unpack("<32f", uc.mem_read(BL, 128)))
+    return out
+lh = run_ch(uc, node, x, 3, [(ids["DRV_ON"], 1), (ids["DRV_DRIVE"], 0), (ids["DRV_LEVEL"], 1000), (ids["DRV_TONE"], 1000)])
+w3 = max(abs(a - b) for a, b in zip(lh[2400:], x[2400:]))
+lo = run_ch(uc, node, x, 5)
+w5 = max(abs(a - b) for a, b in zip(lo[1200:], x[1200:]))
+uc, node = setup()
+pending.clear(); ts_all(uc, 0); ts_all(uc, 1000, ch=3)
+lf = run_ch(uc, node, x, 3, [(ids["DRV_ON"], 1), (ids["DRV_DRIVE"], 0), (ids["DRV_LEVEL"], 1000), (ids["DRV_TONE"], 1000)])
+wf = max(abs(a - b) for a, b in zip(lf[2400:], x[2400:]))
+print(f"     drive fed by channel 4 at send 500: wet peak {w3:.3f} (send 1000: {wf:.3f}); channel 6 (send 0): {w5:.4f}")
+check(w3 > 0.05 and abs(w3 / wf - 0.5) < 0.1 and w5 < 0.01, "track sends: per channel and scaled (channel 4 at 500 = half of 1000; channel 6, send 0, nothing)")
+
 # all three: cost
 uc, node = setup()
 x = [0.3 * math.sin(2 * math.pi * 330 * i / 48000) for i in range(3200)]
@@ -297,16 +351,18 @@ for r_, v in zip(R, (0x24032000, 0x117, 5, STR)): uc.reg_write(r_, v)
 uc.reg_write(UC_ARM_REG_SP, sp); uc.reg_write(UC_ARM_REG_LR, RET | 1)
 uc.emu_start(s4["dly_defs"] | 1, RET, count=1_000_000)
 ours = {d[0]: d for d in defs if d[0] in ids.values()}
+TS = {ids["TS_CHO"], ids["TS_DRV"], ids["TS_D2"]}
+check(all(ours[i][1:5] == (8, f"FX{3 + k}:", 0, 1000) for k, i in enumerate(sorted(TS))), "M4: track sends FX3..FX5 defined like FX1 (type 8, 0..1000)")
 print("     " + ", ".join(f"{d[2]}{d[5]}" for d in ours.values()))
 lists = {d[0]: d for d in ldefs if d[0] in ids.values()}
 print("     lists: " + ", ".join(f"{d[1]}{d[4]} x{d[3]}" for d in lists.values()))
-check(len(ours) == 21 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
-      "M4: the 21 send FX knobs and toggles defined")
+check(len(ours) == 24 and ours[ids["CHO_ON"]][1] == 4 and ours[ids["D2_TIME"]][3:5] == (0, 1000) and ours[ids["D2_BEAT"]][1] == 4,
+      "M4: the 24 send FX knobs and toggles defined (track sends too)")
 names = lambda p, n: [cs(u32(uc, p + 4 * i)) for i in range(n)]
 check(set(lists) == {ids["CHO_MODE"], ids["D2_SYNC"]} and lists[ids["CHO_MODE"]][3] == 3 and names(lists[ids["CHO_MODE"]][2], 3) == ["I", "II", "I+II"]
       and lists[ids["D2_SYNC"]][3] == 12 and names(lists[ids["D2_SYNC"]][2], 12)[::4] == ["1/64", "1/16D", "1/4"],
       "M4: Mode a list (I, II, I+II), Delay 2's synced Time the stock delay's 12 note values")
-check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 23, "M4: each with its own key")
+check(len(set(d[5] for d in ours.values()) | set(d[4] for d in lists.values())) == 26, "M4: each with its own key")
 check(u32(uc, 0x38800FE4) == 0, "M4: boot leaves the FX button at the reverb")
 
 # the reverb set: hall's table, then ours, ending at the common tail with r4, r5 intact
@@ -321,7 +377,7 @@ uc.hook_del(h)
 check(uc.reg_read(UC_ARM_REG_PC) == 0x0812088C and uc.reg_read(UC_ARM_REG_R4) == 0x24030000 and uc.reg_read(UC_ARM_REG_R5) == 0x1234
       and uc.reg_read(UC_ARM_REG_SP) == 0x2407F000, "M4 reverb set: reaches the common tail with r4, r5, sp intact")
 check([a[0] for a in added[:10]] == [0x155, 0x159, 0x15A, 0x13E, 0x146, 0x143, 0x13D, 0x14A, 0x148, 0x14F] and len(added) == 33
-      and {a[0] for a in added[10:]} == set(ids.values()), f"M4 reverb set: the reverb's 10, then the 23 send FX params ({len(added)})")
+      and {a[0] for a in added[10:]} == set(ids.values()) - TS, f"M4 reverb set: the reverb's 10, then the 23 send FX params ({len(added)})")
 
 # the panel list, filtered by mode
 OUT = 0x24034000
@@ -369,4 +425,44 @@ for _ in range(4):
     modes.append(u32(uc, 0x38800FE4))
 check([v[1] for v in views] == [0x10, 0x10, 0x10, 0x10, 0x13] and modes == [0, 1, 2, 3, 0],
       f"FX button: Delay -> Reverb -> Chorus -> Drive -> Delay 2 -> view 0x13 ({[hex(v[1]) for v in views]}, modes {modes})")
+
+# track sends, M4: the channel set, the page button, the third page
+added.clear()
+h = uc.hook_add(UC_HOOK_CODE, m4_add, begin=0x081205E2, end=0x081205E2)
+call(uc, s4["ts_set_add"], 0x24030000, 0x173, 1)
+uc.hook_del(h)
+check(added == [(0x173, 1), (ids["TS_CHO"], 0), (ids["TS_DRV"], 0), (ids["TS_D2"], 0)], f"channel set: 0x173, then the three track sends at 0 ({added})")
+views.clear()
+call(uc, s4["ts_to_page2"], 0x24039000, 3, 0, 0); p3 = [u32(uc, 0x38800FF4)]
+for _ in range(3):
+    call(uc, s4["ts_from_page2"], 0x24039000, 2, 0, 0); p3.append(u32(uc, 0x38800FF4))
+check([v[1] for v in views] == [3, 3, 2, 3] and p3 == [0, 1, 0, 1], f"page button: Vol.. -> Pan.. -> FX3.. -> Vol.. ({[v[1] for v in views]}, {p3})")
+PG = 0x24040000
+uc.mem_map(0x24080000, 0x20000) if False else None
+pages, rows, labels = [], [], []
+def f604(uc, a, s, _):
+    pages.append((uc.reg_read(UC_ARM_REG_R1), list(struct.unpack("<6H", uc.mem_read(0x38800FE8, 12)))))
+    uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+uc.hook_add(UC_HOOK_CODE, f604, begin=0x0812F604, end=0x0812F604)
+stub(uc, 0x0812F398, rows)
+def lab(uc, a, s, _):
+    labels.append((uc.reg_read(UC_ARM_REG_R0) - PG, cs(uc.reg_read(UC_ARM_REG_R1)))); uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+uc.hook_add(UC_HOOK_CODE, lab, begin=0x08139724, end=0x08139724)
+stock = list(struct.unpack("<6H", at(0x0814E280, 12)))
+w32(uc, PG + (0x349C + 1) * 4, 4)                   # OUT3 picked on the stock page
+call(uc, s4["ts_page"], PG, 1)                    # page3 is on (from above)
+on = (pages[-1], [l for l in labels], rows[-1][1] if rows else None, u32(uc, PG + (0x349C + 1) * 4))
+pages.clear(); labels.clear(); rows.clear()
+w32(uc, 0x38800FF4, 0)
+call(uc, s4["ts_page"], PG, 1)
+off = (pages[-1], labels[:], len(rows))
+print(f"     third page: rows {[hex(x) for x in on[0][1]]}, labels {sorted(set(l[1] for l in on[1]))}")
+check(on[0] == (1, [ids["TS_CHO"], ids["TS_DRV"], ids["TS_D2"], 0, 0, 0]) and on[3] == 0 and on[2] == 0
+      and {l[1] for l in on[1] if l[0] in (0xC084, 0xC444)} == {"FX3"} and {l[1] for l in on[1] if l[0] in (0xC1C4, 0xC584)} == {"FX5"}
+      and len(on[1]) == 12, "third page: rows FX3, FX4, FX5 (our sends), labels on both columns, a picked row past them back to the first")
+check(off == ((1, stock), [], 0), "second page (page3 off): stock rows (Pan, FX1, FX2, CUE, OUT3, OUT4), no relabel")
+w32(uc, 0x38800FF4, 1); w32(uc, PG + 0xD26C, 1); rows.clear()
+call(uc, s4["ts_row"], PG, 4); call(uc, s4["ts_row"], PG, 2)
+w32(uc, PG + 0xD26C, 0); call(uc, s4["ts_row"], PG, 4)
+check([r[1] for r in rows] == [2, 4], f"row pick: the third page ignores its empty rows, the first page is untouched ({[r[1] for r in rows]})")
 print("all passed")
