@@ -72,7 +72,9 @@ check(bl_target(0x08120C34) == s4["sfx_rv_tail"] and bl_target(0x0812BCCA) == s4
 check(bl_target(0x081247D8) == s4["sfx_to_reverb"] and bl_target(0x081247E4) == s4["sfx_from_reverb"], "FX button: delay->reverb and reverb->next -> ours")
 check(bl_target(0x0805070A) == s7["sfx_strip"], "mixer's per-channel call -> sfx_strip")
 check(bl_target(0x08120888) == s4["ts_set_add"], "channel set's last add -> ts_set_add")
-check(bl_target(0x0812471E) == s4["ts_to_page2"] and bl_target(0x0812472A) == s4["ts_from_page2"], "track screen page button: 2->3 and 3->2 -> ours")
+check(bl_target(0x0812471E) == s4["ts_mixer_view"] and bl_target(0x08124712) == s4["ts_mixer_view"] and bl_target(0x0812472A) == 0x08123158,
+      "mixer button into its second page -> ts_mixer_view (stock pages); 3 -> 2 stock")
+check(bl_target(0x08124758) == s4["ts_track_to_sends"] and bl_target(0x0812474C) == s4["ts_track_back"], "track button: track screen -> our page -> sidechain")
 check(bl_target(0x081356A8) == s4["ts_page"] and bl_target(0x0812F8EC) == s4["ts_page"] and bl_target(0x0812F590) == s4["ts_row"], "track screen setup (both calls) and row pick -> ours")
 check(struct.unpack("<I", at(0x0812F51C, 4))[0] == 0x38800FE8, "track screen page 2 row table -> backup SRAM copy")
 
@@ -447,10 +449,21 @@ call(uc, s4["ts_set_add"], 0x24030000, 0x173, 1)
 uc.hook_del(h)
 check(added == [(0x173, 1), (ids["TS_CHO"], 0), (ids["TS_DRV"], 0), (ids["TS_D2"], 0)], f"channel set: 0x173, then the three track sends at 0 ({added})")
 views.clear()
-call(uc, s4["ts_to_page2"], 0x24039000, 3, 0, 0); p3 = [u32(uc, 0x38800FF4)]
-for _ in range(3):
-    call(uc, s4["ts_from_page2"], 0x24039000, 2, 0, 0); p3.append(u32(uc, 0x38800FF4))
-check([v[1] for v in views] == [3, 3, 2, 3] and p3 == [0, 1, 0, 1], f"page button: Vol.. -> Pan.. -> FX3.. -> Vol.. ({[v[1] for v in views]}, {p3})")
+APP = 0x24039000
+def press_track():
+    """the track button as the dispatcher handles it, with our two hooks"""
+    v = uc.mem_read(APP + 0x73D2, 1)[0]
+    if v in (5, 6): call(uc, s4["ts_track_to_sends"], APP, 0x16, 0, 0)
+    else: call(uc, s4["ts_track_back"], APP, 5, 0, 0)
+    uc.mem_write(APP + 0x73D2, bytes([views[-1][1]]))
+    return views[-1][1], u32(uc, 0x38800FF4)
+uc.mem_write(APP + 0x73D2, bytes([2])); w32(uc, 0x38800FF4, 0)
+seq = [press_track() for _ in range(4)]
+uc.mem_write(APP + 0x73D2, bytes([3])); w32(uc, 0x38800FF4, 0)
+other = press_track()
+w32(uc, 0x38800FF4, 1); call(uc, s4["ts_mixer_view"], APP, 3, 0, 0)
+check(seq == [(5, 0), (3, 1), (0x16, 0), (5, 0)] and other == (5, 0) and u32(uc, 0x38800FF4) == 0,
+      f"track button: track screen -> FX3..FX5 page -> sidechain -> track; the mixer's own page 2 stays stock ({seq}, {other})")
 PG = 0x24040000
 uc.mem_map(0x24080000, 0x20000) if False else None
 pages, rows, labels = [], [], []
@@ -464,7 +477,8 @@ def lab(uc, a, s, _):
 uc.hook_add(UC_HOOK_CODE, lab, begin=0x08139724, end=0x08139724)
 stock = list(struct.unpack("<6H", at(0x0814E280, 12)))
 w32(uc, PG + (0x349C + 1) * 4, 4)                   # OUT3 picked on the stock page
-call(uc, s4["ts_page"], PG, 1)                    # page3 is on (from above)
+w32(uc, 0x38800FF4, 1)
+call(uc, s4["ts_page"], PG, 1)                    # page3 on
 on = (pages[-1], [l for l in labels], rows[-1][1] if rows else None, u32(uc, PG + (0x349C + 1) * 4))
 pages.clear(); labels.clear(); rows.clear()
 w32(uc, 0x38800FF4, 0)

@@ -276,8 +276,8 @@ void sfx_from_reverb(void *app, unsigned view, int a, int b)
  *
  * The track screen (views 2 and 3, page app+0x558) shows one row's param for every channel; view 2 has Vol, Gain,
  * Solo, Mute, Rec, view 3 Pan, FX1, FX2, CUE, OUT3, OUT4 (FUN_0812f604 sets the labels, FUN_0812f398 picks a row from
- * the table at 0x0814e280 for view 3). Its page button (button 0) toggles 2 <-> 3; we add a turn: view 3 again with
- * rows FX3, FX4, FX5 (our sends), from a table in backup SRAM that the literal @0x0812f51c now points to.
+ * the table at 0x0814e280 for view 3). The track button shows our page between the track and sidechain screens:
+ * view 3 with rows FX3, FX4, FX5 (our sends), from a table in backup SRAM that the literal @0x0812f51c now points to.
  */
 void ts_set_add(void *set, unsigned id, int value)    /* the channel set's last add (bl @0x08120888, id 0x173) */
 {
@@ -300,21 +300,31 @@ static void ts_set_page3(uint32_t on)
     SU->page3 = on;
 }
 
-/* button 0: view 2 -> 3 (@0x0812471e) and 3 -> 2 (@0x0812472a), with our page between 3 and 2 */
-void ts_to_page2(void *app, unsigned view, int a, int b)
+/* The mixer button (button 0, dispatcher event 0xf9) shows the stock pages only: going to the second page (view 3)
+ * from the first (@0x0812471e) or from another screen (@0x08124712, the last mixer view) clears our flag. */
+void ts_mixer_view(void *app, unsigned view, int a, int b)
 {
     ts_set_page3(0);
     fw_view(app, view, a, b);
 }
-void ts_from_page2(void *app, unsigned view, int a, int b)
+
+/* The track button (button 1): from the track screen (views 5, 6) it goes to the sidechain screen (view 0x16,
+ * @0x08124758), and from anywhere else back to the track screen (@0x0812474c). Our page goes between the track and
+ * sidechain screens: the mixer's second page (view 3) with our rows. */
+#define APP_VIEW(app) (*((uint8_t *)(app) + 0x73d2))
+void ts_track_to_sends(void *app, unsigned view, int a, int b)
 {
-    if (!ts_page3()) {
-        ts_set_page3(1);
-        fw_view(app, 3, a, b);      /* view 3 again, now with our rows */
-    } else {
+    (void)view;
+    ts_set_page3(1);
+    fw_view(app, 3, a, b);
+}
+void ts_track_back(void *app, unsigned view, int a, int b)
+{
+    if (APP_VIEW(app) == 3 && ts_page3()) {
         ts_set_page3(0);
+        fw_view(app, 0x16, a, b);   /* on from our page to the sidechain screen */
+    } else
         fw_view(app, view, a, b);
-    }
 }
 
 #define TS_SUB(p) (*(int *)((uint8_t *)(p) + 0xd26c))          /* the page shown: 0 = view 2, 1 = view 3 */

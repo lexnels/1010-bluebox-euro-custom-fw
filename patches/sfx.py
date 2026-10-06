@@ -42,9 +42,12 @@ PATCHES = [
     (0x0805070A, bl(0x0805070A, 0x0805012C), bl(0x0805070A, s7["sfx_strip"])),
     # M4: the channel set's last add (bl FUN_081205e2, id 0x173) -> ts_set_add, which adds the three sends
     (0x08120888, bl(0x08120888, 0x081205E2), bl(0x08120888, s4["ts_set_add"])),
-    # M4: the track screen's page button (button 0), view 2 -> 3 and 3 -> 2 -> through our page (view 3, our rows)
-    (0x0812471E, bl(0x0812471E, 0x08123158), bl(0x0812471E, s4["ts_to_page2"])),
-    (0x0812472A, bl(0x0812472A, 0x08123158), bl(0x0812472A, s4["ts_from_page2"])),
+    # M4: the mixer button (button 0) into its second page (from the first, or another screen): stock pages
+    (0x0812471E, bl(0x0812471E, 0x08123158), bl(0x0812471E, s4["ts_mixer_view"])),
+    (0x08124712, bl(0x08124712, 0x08123158), bl(0x08124712, s4["ts_mixer_view"])),
+    # M4: the track button (button 1): track screen -> our page (view 3, our rows) -> sidechain screen (view 0x16)
+    (0x08124758, bl(0x08124758, 0x08123158), bl(0x08124758, s4["ts_track_to_sends"])),
+    (0x0812474C, bl(0x0812474C, 0x08123158), bl(0x0812474C, s4["ts_track_back"])),
     # M4: the track screen's setup (bl FUN_0812f604, on showing it and on a redraw) -> ts_page; its row pick (bl
     # FUN_0812f398) -> ts_row; its second page's row table (literal 0x0814e280) -> the copy in backup SRAM
     (0x081356A8, bl(0x081356A8, 0x0812F604), bl(0x081356A8, s4["ts_page"])),
@@ -53,4 +56,4 @@ PATCHES = [
     (0x0812F51C, u32(0x0814E280), u32(0x38800FE8)),
 ]
 if os.environ.get("SFX_NO_TRACK_PAGE"):     # a diagnostic build: the sends without the track screen page
-    PATCHES = [p for p in PATCHES if p[0] not in (0x0812471E, 0x0812472A, 0x081356A8, 0x0812F8EC, 0x0812F590, 0x0812F51C)]
+    PATCHES = [p for p in PATCHES if p[0] not in (0x0812471E, 0x08124712, 0x08124758, 0x0812474C, 0x081356A8, 0x0812F8EC, 0x0812F590, 0x0812F51C)]
