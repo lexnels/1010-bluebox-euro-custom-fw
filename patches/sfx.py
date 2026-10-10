@@ -26,6 +26,9 @@ PATCHES = [
     # M7: reverb vtable 0x0806ada0 slot 3 (hall_process, patches/hall.py) -> sfx_process, which runs the send FX (into
     # the main mix and the delay's and reverb's buses, before those run), then calls hall_process
     (0x0806ADAC, u32(h7["hall_process"] | 1), u32(s7["sfx_process"] | 1)),
+    # M7: each message from the M4 (bl FUN_08052444 in the audio task's drain loop) -> sfx_msg, which takes ours
+    # straight into the state (the master queue they used to come through drops all but 64 per block)
+    (0x0804C7A8, bl(0x0804C7A8, 0x08052444), bl(0x0804C7A8, s7["sfx_msg"])),
     # M7: the graph builder's delay constructor call (bl FUN_08052e30) -> sfx_ctor, which then allocates our memory
     (0x080518D2, bl(0x080518D2, 0x08052E30), bl(0x080518D2, s7["sfx_ctor"])),
     # M4: the reverb set's table loop (patches/hall.py) exits through sfx_rv_tail, which adds the send FX params

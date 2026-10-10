@@ -31,6 +31,7 @@ typedef void (*stereo_fn)(void *bus, float **l, float **r);
 typedef void *(*ctor_fn)(void *obj);
 typedef uint32_t (*alloc_fn)(uint32_t size);
 typedef void (*strip_fn)(void *mixer, void *in, unsigned idx, float *ch, void *main, void *ctx);
+typedef void (*dispatch_fn)(void *ctx, void *event);
 #define fw_reverb   ((process_fn)FN(HALL_PROCESS))     /* hall_process (src/hall_m7.c), from build.sh */
 #define fw_dly_ctor ((ctor_fn)FN(0x08052e30))
 #define fw_alloc    ((alloc_fn)FN(0x080413d0))
@@ -40,6 +41,7 @@ typedef void (*strip_fn)(void *mixer, void *in, unsigned idx, float *ch, void *m
 #define fw_next_ev  ((event_fn)FN(0x0804e938))
 #define fw_stereo   ((stereo_fn)FN(0x0804d598))
 #define fw_strip    ((strip_fn)FN(0x0805012c))     /* the mixer's per-channel process (FUN_08050564 calls it) */
+#define fw_dispatch ((dispatch_fn)FN(0x08052444))  /* one incoming message into its node's queue and the master queue (0xc) */
 #define HEAP_TOP    (*(volatile uint32_t *)0x24000004u)    /* FUN_080413d0's SDRAM bump pointer */
 
 struct fw_ev { uint8_t type, _p0[7]; uint32_t target; uint16_t id, _p1; int32_t value; uint32_t _p2; };
@@ -79,7 +81,8 @@ struct sfx {
     uint32_t d2_wp, d2_clear;
     uint32_t d2_seg, d2_j, d2_T, d2_rng, d2_isrev;
     float d2_dph, d2_dnoise, d2_dtgt, d2_dm;                    /* Drift: LFO phase, wander, its target, extra delay */
-    uint32_t d2_dcount, d2_drng;               /* Reverse: this repeat's length, where in it, backwards? */
+    uint32_t d2_dcount, d2_drng;
+    uint32_t dirty;                                             /* params changed by sfx_msg since the last update() */               /* Reverse: this repeat's length, where in it, backwards? */
     float cho_buf[CHO_N];
     int16_t d2_l[D2_N], d2_r[D2_N];                             /* +-1 as +-32767 (sat keeps them in range) */
 };
@@ -430,6 +433,30 @@ static void out(const struct dest *d, float *g, float gt, int32_t level, int32_t
     *g = gg;
 }
 
+/*
+ * Every message from the M4 (bl FUN_08052444 @0x0804c7a8, in the audio task's loop that drains them before each
+ * block): ours are taken here, straight into the state. They used to be read from the master queue (0xc), but that
+ * queue holds 64 messages and drops the rest, and loading a project sends hundreds at once (every channel's set,
+ * our track sends last in each), so FX settings and sends went missing until a knob was turned again.
+ */
+void sfx_msg(void *ctx, struct fw_ev *ev)
+{
+    if (ev->type == 0x39) {
+        struct sfx *s = state();
+        if (s) {
+            if (ev->id >= SFX_TS_CHO && ev->id <= SFX_TS_D2) {
+                set_ts(s, ev->id, ev->target, ev->value);
+                return;
+            }
+            if (set(s, ev->id, ev->value)) {
+                s->dirty = 1;
+                return;
+            }
+        }
+    }
+    fw_dispatch(ctx, ev);
+}
+
 /* The reverb's process (vtable slot 0x0806adac): our FX, then the reverb (hall_process) and the chain. */
 unsigned sfx_process(void *obj, void *ctx)
 {
@@ -438,7 +465,8 @@ unsigned sfx_process(void *obj, void *ctx)
         return fw_reverb(obj, ctx);
     void *q = fw_queue(ctx, 0xc);
     struct fw_ev ev;
-    int changed = 0;
+    int changed = s->dirty;
+    s->dirty = 0;
     for (unsigned i = 0; fw_next_ev(q, i, &ev); i++)
         if (ev.type == 0x39) {
             if (ev.id >= SFX_TS_CHO && ev.id <= SFX_TS_D2)

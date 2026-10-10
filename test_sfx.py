@@ -357,6 +357,26 @@ wf = max(abs(a - b) for a, b in zip(lf[2400:], x[2400:]))
 print(f"     drive fed by channel 4 at send 500: wet peak {w3:.3f} (send 1000: {wf:.3f}); channel 6 (send 0): {w5:.4f}")
 check(w3 > 0.05 and abs(w3 / wf - 0.5) < 0.1 and w5 < 0.01, "track sends: per channel and scaled (channel 4 at 500 = half of 1000; channel 6, send 0, nothing)")
 
+# a project load: hundreds of messages in one go (the master queue keeps only 64). Ours go straight in through
+# sfx_msg, the rest on to the stock dispatcher.
+uc, node = setup()
+pending.clear()
+fwd = []
+stub(uc, 0x08052444, fwd)
+EVM = 0x24070000
+def msg(pid, val, target=0x15):
+    uc.mem_write(EVM, struct.pack("<B7xIHHiI", 0x39, target, pid, 0, val, 0)); call(uc, s7["sfx_msg"], CTX, EVM)
+for c in range(12):                             # every channel's set: 40 stock params, then our three sends
+    for k in range(40): msg(0x100 + k, 0, c)
+    for t in ("TS_CHO", "TS_DRV", "TS_D2"): msg(ids[t], 1000 if c == 3 else 0, c)
+for k, v in (("DRV_ON", 1), ("DRV_DRIVE", 0), ("DRV_LEVEL", 1000), ("DRV_TONE", 1000)): msg(ids[k], v)
+msg(0x4A, 5); msg(0x63, 500, 3)                 # the FX1 delay's Pitch and a channel's Pan: not ours
+lb = run_ch(uc, node, x, 3)
+wb = max(abs(a - b) for a, b in zip(lb[2400:], x[2400:]))
+print(f"     after {len(fwd)} forwarded messages: drive fed by channel 4 (send 1000), wet peak {wb:.3f}")
+check(abs(wb - wf) < 0.02 and len(fwd) == 12 * 40 + 2 and all(u32(uc, f[1] + 12) & 0xFFFF not in ids.values() for f in fwd),
+      "a project load's flood: our settings and sends all land (straight in), every other message goes on to the stock dispatcher")
+
 # after a reset: backup SRAM and SDRAM still hold the old state, but the heap is back below it; the mixer runs
 # before the graph's FX are built again, and must leave that memory (someone else's by now) alone
 uc, node = setup()
